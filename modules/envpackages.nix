@@ -28,6 +28,15 @@ in
       # Things not in build/soong/ui/build/paths/config.go
       nettools # Needed for "hostname" in build/soong/ui/build/sandbox_linux.go
       procps # Needed for "ps" in build/envsetup.sh
+      (writeShellScriptBin "cp" ''
+        for arg in "$@"; do
+          if [[ ! "$arg" == -* ]]; then
+            dst_arg="$arg"
+          fi
+        done
+        ${coreutils}/bin/cp "$@"
+        chmod u+w "$dst_arg"
+      '')
     ]
     (mkIf (config.androidVersion >= 12) [
       freetype # Needed by jdk9 prebuilt
