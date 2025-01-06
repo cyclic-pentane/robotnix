@@ -63,6 +63,7 @@ let
       ./modules/security-pki.nix
       ./modules/kernel.nix
       ./modules/microg.nix
+      ./modules/notifications.nix
       ./modules/pixel
       ./modules/pixel/active-edge.nix
       ./modules/pixel/driver-binaries.nix
