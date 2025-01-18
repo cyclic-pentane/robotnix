@@ -17,6 +17,7 @@ struct DeviceMetadata {
     vendor: String,
     name: String,
     variant: Variant,
+    deps: Vec<Vec<String>>
 }
 
 fn main() {
