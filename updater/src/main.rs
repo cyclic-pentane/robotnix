@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
+use std::io::Write;
 use std::env;
 use std::io::BufReader;
 use std::process::Command;
@@ -28,18 +29,48 @@ struct NixPrefetchGitOutput {
     date: String,
     path: String,
     hash: String,
-    fetchLFS: bool,
-    fetchSubmodules: bool,
-    deepClone: bool,
-    leaveDotGit: bool,
+    #[serde(rename = "fetchLFS")]
+    fetch_lfs: bool,
+    #[serde(rename = "fetchSubmodules")]
+    fetch_submodules: bool,
+    #[serde(rename = "deepClone")]
+    deep_clone: bool,
+    #[serde(rename = "leaveDotGit")]
+    leave_dot_git: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct FetchgitArgs {
+    url: String,
+    rev: String,
+    hash: String,
+    #[serde(rename = "fetchLFS")]
+    fetch_lfs: bool,
+    #[serde(rename = "fetchSubmodules")]
+    fetch_submodules: bool,
+    #[serde(rename = "deepClone")]
+    deep_clone: bool,
+    #[serde(rename = "leaveDotGit")]
+    leave_dot_git: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Device {
+    branch: String,
+    deps: HashMap<String, FetchgitArgs>,
 }
 
 fn get_device_repo(vendor: &str, device: &str) -> Vec<String> {
     vec!["android", "device", vendor, device].iter().map(|x| x.to_string()).collect()
 }
 
+fn get_repo_url(repo: &Vec<String>) -> String {
+    format!("https://github.com/LineageOS/{}", repo.join("_"))
+}
+
 fn nix_prefetch_git_repo(repo: &Vec<String>) -> NixPrefetchGitOutput {
-    let repo_url = format!("https://github.com/LineageOS/{}", repo.join("_"));
+    let repo_url = get_repo_url(repo);
+    println!("Prefetching {}", &repo_url);
     let output = Command::new("nix-prefetch-git")
         .arg(&repo_url)
         .output()
@@ -56,19 +87,32 @@ fn main() {
     let reader = BufReader::new(file);
     let devices: HashMap<String, DeviceMetadata> = serde_json::from_reader(reader).unwrap();
 
-    let mut repos_to_fetch: HashSet<Vec<String>> = HashSet::new();
+    let mut device_dir_entries: HashMap<String, Device> = HashMap::new();
     for (device_name, device_metadata) in devices.iter() {
-        repos_to_fetch.insert(get_device_repo(&device_metadata.vendor, &device_name));
+        let device_repo = get_device_repo(&device_metadata.vendor, &device_name);
 
+        let mut deps: HashMap<String, FetchgitArgs> = HashMap::new();
         for dep in device_metadata.deps.iter() {
-            repos_to_fetch.insert(dep.clone());
+            let output = nix_prefetch_git_repo(dep);
+            deps.insert(dep[1..].join("/"), FetchgitArgs {
+                url: output.url,
+                rev: output.rev,
+                hash: output.hash,
+                fetch_lfs: output.fetch_lfs,
+                fetch_submodules: output.fetch_submodules,
+                deep_clone: output.deep_clone,
+                leave_dot_git: output.leave_dot_git,
+            });
         }
+
+        device_dir_entries.insert(device_name.clone(), Device {
+            branch: device_metadata.branch.clone(),
+            deps: deps
+        });
     }
 
-    let mut prefetch_outputs: Vec<NixPrefetchGitOutput> = Vec::new();
-    for repo in repos_to_fetch.iter() {
-        let output = nix_prefetch_git_repo(repo);
-        println!("{:?}", &output);
-        prefetch_outputs.push(output);
-    }
+    let device_dirs_json = serde_json::to_string(&device_dir_entries).unwrap();
+    let mut device_dirs_file = File::create(&args[2]).unwrap();
+    device_dirs_file.write_all(device_dirs_json.as_bytes());
+    println!("{device_dir_entries:?}");
 }
