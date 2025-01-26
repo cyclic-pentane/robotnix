@@ -132,10 +132,8 @@ fn main() {
                 });
             }
         }
+        let device_dirs_json = serde_json::to_string(&device_dir_entries).unwrap();
+        let mut device_dirs_file = File::create(&args[2]).unwrap();
+        device_dirs_file.write_all(device_dirs_json.as_bytes());
     }
-
-    let device_dirs_json = serde_json::to_string(&device_dir_entries).unwrap();
-    let mut device_dirs_file = File::create(&args[2]).unwrap();
-    device_dirs_file.write_all(device_dirs_json.as_bytes());
-    println!("{device_dir_entries:?}");
 }
