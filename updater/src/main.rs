@@ -1,8 +1,9 @@
 use std::collections::{HashMap, HashSet};
+use std::fs;
 use std::fs::File;
 use std::io::Write;
 use std::env;
-use std::io::BufReader;
+use std::io::{BufReader, BufWriter};
 use std::process::Command;
 use serde::{Deserialize, Serialize};
 use serde_json;
@@ -111,6 +112,70 @@ impl Repository {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct HudsonDevice {
+    model: String,
+    oem: String,
+    name: String,
+}
+
+fn get_device_metadata_from_hudson(hudson_path: &str) -> HashMap<String, DeviceMetadata> {
+    let build_targets = {
+        let text_bytes = fs::read(format!("{}/lineage-build-targets", hudson_path)).unwrap();
+        let text = std::str::from_utf8(&text_bytes).unwrap();
+        let mut build_targets = vec![];
+        for line in text.split("\n") {
+            if line.starts_with("#") || line == "" {
+                continue;
+            }
+            let fields: Vec<&str> = line.split(" ").collect();
+            let device = fields.get(0).unwrap().to_string();
+            let variant = fields.get(1).unwrap().to_string();
+            let branch = fields.get(2).unwrap().to_string();
+
+            build_targets.push((device, variant, branch));
+        }
+        
+        build_targets
+    };
+
+    let reader = BufReader::new(File::open(format!("{}/updater/devices.json", hudson_path)).unwrap());
+    let hudson_devices: Vec<HudsonDevice> = serde_json::from_reader(reader).unwrap();
+    let reader = BufReader::new(File::open(format!("{}/updater/device_deps.json", hudson_path)).unwrap());
+    let hudson_device_deps: HashMap<String, Vec<String>> = serde_json::from_reader(reader).unwrap();
+
+    let mut device_metadata = HashMap::new();
+
+    for (device, variant, branch) in build_targets {
+        let hudson_device = hudson_devices.iter().filter(|x| x.model == device).next().unwrap();
+        let hudson_deps = hudson_device_deps.get(&device).unwrap();
+        device_metadata.insert(device, DeviceMetadata { 
+            name: hudson_device.name.clone(),
+            branch: branch,
+            // We use the json parser for strings like `userdebug` by wrapping them in quotation
+            // marks, like `"userdebug"`. This is a dirty hack and I need to figure out how to do
+            // this properly at some point.
+            variant: serde_json::from_str(&format!("\"{}\"", variant)).unwrap(),
+            vendor: hudson_device.oem.to_lowercase(),
+            deps: hudson_deps.iter().map(|x| Repository {
+                remote: Remote::LineageOS,
+                path: x.split("_").map(|x| x.to_string()).collect(),
+            }).collect()
+        });
+    }
+
+    device_metadata
+}
+
+fn fetch_device_metadata() -> HashMap<String, DeviceMetadata> {
+    let prefetch_git_output = nix_prefetch_git_repo(&Repository {
+        remote: Remote::LineageOS,
+        path: vec!["hudson".to_string()],
+    });
+
+    get_device_metadata_from_hudson(&prefetch_git_output.path)
+}
+
 fn ls_remote(repo: &Repository, branch: &str) -> String {
     let url = repo.url();
     println!("ls-remote'ing {}", &url);
@@ -140,6 +205,12 @@ fn nix_prefetch_git_repo(repo: &Repository) -> NixPrefetchGitOutput {
 fn main() {
     let args: Vec<String> = env::args().collect();
     let device_metadata_path = &args[1];
+
+    let fetched_device_metadata = fetch_device_metadata();
+    println!("{:?}", fetched_device_metadata);
+    let file = File::create(device_metadata_path).unwrap();
+    let writer = BufWriter::new(file);
+    serde_json::to_writer(writer, &fetched_device_metadata);
 
     let reader = BufReader::new(File::open(device_metadata_path).unwrap());
     let devices: HashMap<String, DeviceMetadata> = serde_json::from_reader(reader).unwrap();
