@@ -19,7 +19,7 @@ struct DeviceMetadata {
     vendor: String,
     name: String,
     variant: Variant,
-    deps: Vec<Vec<String>>
+    deps: Vec<Repository>
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -59,12 +59,14 @@ struct Device {
     deps: HashMap<String, FetchgitArgs>,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
 enum Remote {
     LineageOS,
     TheMuppetsGitHub,
     TheMuppetsGitLab
 }
 
+#[derive(Debug, Serialize, Deserialize)]
 struct Repository {
     remote: Remote,
     path: Vec<String>
@@ -73,9 +75,9 @@ struct Repository {
 impl Remote {
     fn base_url(&self) -> String {
         match self {
-            Repository::LineageOS => "https://github.com/LineageOS/",
-            Repository::TheMuppetsGitHub => "https://github.com/TheMuppets",
-            Repository::TheMuppetsGitLab => "https://gitlab.com/TheMuppets"
+            Remote::LineageOS => "https://github.com/LineageOS",
+            Remote::TheMuppetsGitHub => "https://github.com/TheMuppets",
+            Remote::TheMuppetsGitLab => "https://gitlab.com/TheMuppets"
         }.to_string()
     }
 }
@@ -87,22 +89,24 @@ impl Repository {
             path: vec![
                 "android".to_string(),
                 "device".to_string(),
-                vendor.clone(),
-                device.clone()
+                vendor.to_string(),
+                device.to_string()
             ]
         }
     }
 
     fn url(&self) -> String {
-        format!("{}{}", &self.repo.base_url(), &self.path.join("_")
+        format!("{}/{}", &self.remote.base_url(), &self.path.join("_"))
     }
 
+    // Path of the git repository within the AOSP source tree. For instance,
+    // android_device_fairphone_FP4 has the source tree path device/fairphone/FP4
     fn source_tree_path(&self) -> String {
-        match self.path.get(0) {
+        match self.path.get(0).map(|x| x.as_str()) {
             Some("android") => &self.path[1..],
             Some("proprietary") => &self.path[1..],
-            Some(xs) => xs,
-            None => &vec![]
+            Some(_) => panic!("Not implemented yet"),
+            None => panic!("Empty path")
         }.join("/")
     }
 }
@@ -120,8 +124,8 @@ fn ls_remote(repo: &Repository, branch: &str) -> String {
     std::str::from_utf8(output.split(|x| x == &b'\t').nth(0).unwrap()).unwrap().to_string()
 }
 
-fn nix_prefetch_git_repo(repo: &Vec<String>) -> NixPrefetchGitOutput {
-    let repo_url = get_repo_url(repo);
+fn nix_prefetch_git_repo(repo: &Repository) -> NixPrefetchGitOutput {
+    let repo_url = repo.url();
     println!("Prefetching {}", &repo_url);
     let output = Command::new("nix-prefetch-git")
         .arg(&repo_url)
@@ -131,7 +135,7 @@ fn nix_prefetch_git_repo(repo: &Vec<String>) -> NixPrefetchGitOutput {
     serde_json::from_slice(&output.stdout).unwrap()
 }
 
-fn get_corresponding_vendor_repos(repo: &Vec<String>) -> Nix
+// fn get_corresponding_vendor_repos(repo: &Vec<String>) -> Nix
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -141,8 +145,18 @@ fn main() {
     let devices: HashMap<String, DeviceMetadata> = serde_json::from_reader(reader).unwrap();
 
     // Read pre-existing device_dirs.json for incremental updates.
-    let reader = File::open(&args[2]).map(|f| BufReader::new(f));
-    let mut device_dir_entries: HashMap<String, Device> = reader.map(|r| serde_json::from_reader(r)).unwrap_or(HashMap::new());
+    let mut device_dir_entries: HashMap<String, Device> = {
+        let reader = File::open(&args[2]).map(|f| BufReader::new(f));
+        if let Ok(reader) = reader {
+            if let Ok(entries) = serde_json::from_reader(reader) {
+                entries
+            } else {
+                HashMap::new()
+            }
+        } else {
+            HashMap::new()
+        }
+    };
     for (device_name, device_metadata) in devices.iter() {
         if !device_dir_entries.contains_key(device_name) {
             device_dir_entries.insert(device_name.clone(), Device {
@@ -152,7 +166,7 @@ fn main() {
         let mut device = device_dir_entries.get_mut(device_name).unwrap();
 
         for dep in device_metadata.deps.iter() {
-            let path = dep[1..].join("/");
+            let path = dep.source_tree_path();
             let is_up_to_date = if let Some(args) = device.deps.get(&path) {
                 let current_rev = ls_remote(dep, &device_metadata.branch);
                 current_rev == args.rev
