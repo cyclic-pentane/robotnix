@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::fs::File;
+use std::io;
 use std::io::Write;
 use std::env;
 use std::io::{BufReader, BufWriter};
@@ -53,6 +54,20 @@ struct FetchgitArgs {
     deep_clone: bool,
     #[serde(rename = "leaveDotGit")]
     leave_dot_git: bool,
+}
+
+impl FetchgitArgs {
+    fn from_prefetch_output(output: NixPrefetchGitOutput) -> FetchgitArgs {
+        FetchgitArgs {
+            url: output.url,
+            rev: output.rev,
+            hash: output.hash,
+            fetch_lfs: output.fetch_lfs,
+            fetch_submodules: output.fetch_submodules,
+            deep_clone: output.deep_clone,
+            leave_dot_git: output.leave_dot_git,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -119,19 +134,30 @@ struct HudsonDevice {
     name: String,
 }
 
-fn get_device_metadata_from_hudson(hudson_path: &str) -> HashMap<String, DeviceMetadata> {
+#[derive(Debug)]
+enum DeviceMetadataHudsonError {
+    HudsonFileRead(io::Error),
+    Utf8(std::str::Utf8Error),
+    InvalidLineageBuildTargets,
+    ParserError(serde_json::Error),
+    ModelNotFoundInUpdaterDir(String),
+}
+
+fn get_device_metadata_from_hudson(hudson_path: &str) -> Result<HashMap<String, DeviceMetadata>, DeviceMetadataHudsonError> {
     let build_targets = {
-        let text_bytes = fs::read(format!("{}/lineage-build-targets", hudson_path)).unwrap();
-        let text = std::str::from_utf8(&text_bytes).unwrap();
+        let text_bytes = fs::read(format!("{}/lineage-build-targets", hudson_path))
+            .map_err(|e| DeviceMetadataHudsonError::HudsonFileRead(e))?;
+        let text = std::str::from_utf8(&text_bytes)
+            .map_err(|e| DeviceMetadataHudsonError::Utf8(e))?;
         let mut build_targets = vec![];
         for line in text.split("\n") {
             if line.starts_with("#") || line == "" {
                 continue;
             }
             let fields: Vec<&str> = line.split(" ").collect();
-            let device = fields.get(0).unwrap().to_string();
-            let variant = fields.get(1).unwrap().to_string();
-            let branch = fields.get(2).unwrap().to_string();
+            let device  = fields.get(0).ok_or(DeviceMetadataHudsonError::InvalidLineageBuildTargets)?.to_string();
+            let variant = fields.get(1).ok_or(DeviceMetadataHudsonError::InvalidLineageBuildTargets)?.to_string();
+            let branch  = fields.get(2).ok_or(DeviceMetadataHudsonError::InvalidLineageBuildTargets)?.to_string();
 
             build_targets.push((device, variant, branch));
         }
@@ -139,23 +165,27 @@ fn get_device_metadata_from_hudson(hudson_path: &str) -> HashMap<String, DeviceM
         build_targets
     };
 
-    let reader = BufReader::new(File::open(format!("{}/updater/devices.json", hudson_path)).unwrap());
-    let hudson_devices: Vec<HudsonDevice> = serde_json::from_reader(reader).unwrap();
-    let reader = BufReader::new(File::open(format!("{}/updater/device_deps.json", hudson_path)).unwrap());
-    let hudson_device_deps: HashMap<String, Vec<String>> = serde_json::from_reader(reader).unwrap();
+    let reader = BufReader::new(File::open(format!("{}/updater/devices.json", hudson_path))
+        .map_err(|e| DeviceMetadataHudsonError::HudsonFileRead(e))?);
+    let hudson_devices: Vec<HudsonDevice> = serde_json::from_reader(reader)
+        .map_err(|e| DeviceMetadataHudsonError::ParserError(e))?;
+    let reader = BufReader::new(File::open(format!("{}/updater/device_deps.json", hudson_path))
+        .map_err(|e| DeviceMetadataHudsonError::HudsonFileRead(e))?);
+    let hudson_device_deps: HashMap<String, Vec<String>> = serde_json::from_reader(reader)
+        .map_err(|e| DeviceMetadataHudsonError::ParserError(e))?;
 
     let mut device_metadata = HashMap::new();
 
     for (device, variant, branch) in build_targets {
-        let hudson_device = hudson_devices.iter().filter(|x| x.model == device).next().unwrap();
-        let hudson_deps = hudson_device_deps.get(&device).unwrap();
+        let hudson_device = hudson_devices.iter().filter(|x| x.model == device).next().ok_or(DeviceMetadataHudsonError::ModelNotFoundInUpdaterDir(device.clone()))?;
+        let hudson_deps = hudson_device_deps.get(&device).ok_or(DeviceMetadataHudsonError::ModelNotFoundInUpdaterDir(device.clone()))?;
         device_metadata.insert(device, DeviceMetadata { 
             name: hudson_device.name.clone(),
             branch: branch,
             // We use the json parser for strings like `userdebug` by wrapping them in quotation
             // marks, like `"userdebug"`. This is a dirty hack and I need to figure out how to do
             // this properly at some point.
-            variant: serde_json::from_str(&format!("\"{}\"", variant)).unwrap(),
+            variant: serde_json::from_str(&format!("\"{}\"", variant)).map_err(|e| DeviceMetadataHudsonError::ParserError(e))?,
             vendor: hudson_device.oem.to_lowercase(),
             deps: hudson_deps.iter().map(|x| Repository {
                 remote: Remote::LineageOS,
@@ -164,19 +194,32 @@ fn get_device_metadata_from_hudson(hudson_path: &str) -> HashMap<String, DeviceM
         });
     }
 
-    device_metadata
+    Ok(device_metadata)
 }
 
-fn fetch_device_metadata() -> HashMap<String, DeviceMetadata> {
+#[derive(Debug)]
+enum FetchDeviceMetadataError {
+    PrefetchGit(NixPrefetchGitError),
+    Hudson(DeviceMetadataHudsonError),
+}
+
+fn fetch_device_metadata() -> Result<HashMap<String, DeviceMetadata>, FetchDeviceMetadataError> {
     let prefetch_git_output = nix_prefetch_git_repo(&Repository {
         remote: Remote::LineageOS,
         path: vec!["hudson".to_string()],
-    });
+    }).map_err(|e| FetchDeviceMetadataError::PrefetchGit(e))?;
 
     get_device_metadata_from_hudson(&prefetch_git_output.path)
+        .map_err(|e| FetchDeviceMetadataError::Hudson(e))
 }
 
-fn ls_remote(repo: &Repository, branch: &str) -> String {
+#[derive(Debug)]
+enum GetRevOfBranchError {
+    LsRemote(io::Error),
+    ParserError,
+}
+
+fn get_rev_of_branch(repo: &Repository, branch: &str) -> Result<String, GetRevOfBranchError> {
     let url = repo.url();
     println!("ls-remote'ing {}", &url);
     let output = Command::new("git")
@@ -184,33 +227,54 @@ fn ls_remote(repo: &Repository, branch: &str) -> String {
         .arg(&url)
         .arg(format!("refs/heads/{branch}"))
         .output()
-        .unwrap()
+        .map_err(|e| GetRevOfBranchError::LsRemote(e))?
         .stdout;
-    std::str::from_utf8(output.split(|x| x == &b'\t').nth(0).unwrap()).unwrap().to_string()
+    Ok(std::str::from_utf8(output.split(|x| x == &b'\t').nth(0)
+        .ok_or(GetRevOfBranchError::ParserError)?)
+        .map_err(|_| GetRevOfBranchError::ParserError)?
+        .to_string())
 }
 
-fn nix_prefetch_git_repo(repo: &Repository) -> NixPrefetchGitOutput {
+
+#[derive(Debug)]
+enum NixPrefetchGitError {
+    IOError(io::Error),
+    ParserError(serde_json::Error),
+}
+
+fn nix_prefetch_git_repo(repo: &Repository) -> Result<NixPrefetchGitOutput, NixPrefetchGitError> {
     let repo_url = repo.url();
     println!("Prefetching {}", &repo_url);
     let output = Command::new("nix-prefetch-git")
         .arg(&repo_url)
         .output()
-        .unwrap();
+        .map_err(|e| NixPrefetchGitError::IOError(e))?;
 
-    serde_json::from_slice(&output.stdout).unwrap()
+    serde_json::from_slice(&output.stdout).map_err(|e| NixPrefetchGitError::ParserError(e))
 }
 
-// fn get_corresponding_vendor_repos(repo: &Vec<String>) -> Nix
+#[derive(Debug)]
+enum FetchDeviceMetadataToError {
+    Fetch(FetchDeviceMetadataError),
+    FileWrite(io::Error),
+}
+
+fn fetch_device_metadata_to(device_metadata_path: &str) -> Result<(), FetchDeviceMetadataToError> {
+    let fetched_device_metadata = fetch_device_metadata()
+        .map_err(|e| FetchDeviceMetadataToError::Fetch(e))?;
+    let file = File::create(device_metadata_path)
+        .map_err(|e| FetchDeviceMetadataToError::FileWrite(e))?;
+    let writer = BufWriter::new(file);
+    serde_json::to_writer(writer, &fetched_device_metadata);
+
+    Ok(())
+}
 
 fn main() {
     let args: Vec<String> = env::args().collect();
     let device_metadata_path = &args[1];
 
-    let fetched_device_metadata = fetch_device_metadata();
-    println!("{:?}", fetched_device_metadata);
-    let file = File::create(device_metadata_path).unwrap();
-    let writer = BufWriter::new(file);
-    serde_json::to_writer(writer, &fetched_device_metadata);
+    fetch_device_metadata_to(device_metadata_path).unwrap();
 
     let reader = BufReader::new(File::open(device_metadata_path).unwrap());
     let devices: HashMap<String, DeviceMetadata> = serde_json::from_reader(reader).unwrap();
@@ -239,23 +303,15 @@ fn main() {
         for dep in device_metadata.deps.iter() {
             let path = dep.source_tree_path();
             let is_up_to_date = if let Some(args) = device.deps.get(&path) {
-                let current_rev = ls_remote(dep, &device_metadata.branch);
+                let current_rev = get_rev_of_branch(dep, &device_metadata.branch).unwrap();
                 current_rev == args.rev
             } else {
                 false
             };
 
             if !is_up_to_date {
-                let output = nix_prefetch_git_repo(dep);
-                device.deps.insert(path, FetchgitArgs {
-                    url: output.url,
-                    rev: output.rev,
-                    hash: output.hash,
-                    fetch_lfs: output.fetch_lfs,
-                    fetch_submodules: output.fetch_submodules,
-                    deep_clone: output.deep_clone,
-                    leave_dot_git: output.leave_dot_git,
-                });
+                let output = nix_prefetch_git_repo(dep).unwrap();
+                device.deps.insert(path, FetchgitArgs::from_prefetch_output(output));
             }
         }
         let device_dirs_json = serde_json::to_string(&device_dir_entries).unwrap();
