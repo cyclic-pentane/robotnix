@@ -297,14 +297,30 @@ fn read_device_dir_file(path: &str) -> Result<HashMap<String, DeviceDir>, ReadDe
     serde_json::from_reader(reader).map_err(|e| ReadDeviceDirsError::Parser(e))
 }
 
+#[derive(Debug)]
+enum WriteDeviceDirsError {
+    Serialize(serde_json::Error),
+    WriteToFile(io::Error),
+}
+
+fn write_device_dir_file(path: &str, device_dirs: &HashMap<String, DeviceDir>) -> Result<(), WriteDeviceDirsError> {
+    let device_dirs_json = serde_json::to_string(&device_dirs)
+        .map_err(|e| WriteDeviceDirsError::Serialize(e))?;
+    let mut device_dirs_file = File::create(path)
+        .map_err(|e| WriteDeviceDirsError::WriteToFile(e))?;
+    device_dirs_file.write_all(device_dirs_json.as_bytes())
+        .map_err(|e| WriteDeviceDirsError::WriteToFile(e))?;
+
+    Ok(())
+}
+
 
 #[derive(Debug)]
 enum FetchDeviceDirsError {
     ReadDeviceDirs(ReadDeviceDirsError),
     GetRevOfBranch(GetRevOfBranchError),
     PrefetchGit(NixPrefetchGitError),
-    WriteToFile(io::Error),
-    Serialize(serde_json::Error),
+    WriteFile(WriteDeviceDirsError),
 }
 
 fn incrementally_fetch_device_dirs(devices: &HashMap<String, DeviceMetadata>, device_dirs_path: &str) -> Result<HashMap<String, DeviceDir>, FetchDeviceDirsError> {
@@ -341,12 +357,9 @@ fn incrementally_fetch_device_dirs(devices: &HashMap<String, DeviceMetadata>, de
                 device.deps.insert(path, FetchgitArgs::from_prefetch_output(output));
             }
         }
-        let device_dirs_json = serde_json::to_string(&device_dirs)
-            .map_err(|e| FetchDeviceDirsError::Serialize(e))?;
-        let mut device_dirs_file = File::create(device_dirs_path)
-            .map_err(|e| FetchDeviceDirsError::WriteToFile(e))?;
-        device_dirs_file.write_all(device_dirs_json.as_bytes())
-            .map_err(|e| FetchDeviceDirsError::WriteToFile(e))?;
+
+        write_device_dir_file(device_dirs_path, &device_dirs)
+            .map_err(|e| FetchDeviceDirsError::WriteFile(e))?;
     }
 
     Ok(device_dirs)
