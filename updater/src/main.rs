@@ -181,7 +181,8 @@ fn get_device_metadata_from_hudson(hudson_path: &str) -> Result<HashMap<String, 
 
     for (device, variant, branch) in build_targets {
         let hudson_device = hudson_devices.iter().filter(|x| x.model == device).next().ok_or(DeviceMetadataHudsonError::ModelNotFoundInUpdaterDir(device.clone()))?;
-        let hudson_deps = hudson_device_deps.get(&device).ok_or(DeviceMetadataHudsonError::ModelNotFoundInUpdaterDir(device.clone()))?;
+        let mut hudson_deps = hudson_device_deps.get(&device).ok_or(DeviceMetadataHudsonError::ModelNotFoundInUpdaterDir(device.clone()))?.clone();
+        hudson_deps.sort();
         device_metadata.insert(device, DeviceMetadata { 
             name: hudson_device.name.clone(),
             branch: branch,
@@ -210,7 +211,7 @@ fn fetch_device_metadata() -> Result<HashMap<String, DeviceMetadata>, FetchDevic
     let prefetch_git_output = nix_prefetch_git_repo(&Repository {
         remote: Remote::LineageOS,
         path: vec!["hudson".to_string()],
-    }).map_err(|e| FetchDeviceMetadataError::PrefetchGit(e))?;
+    }, &"main").map_err(|e| FetchDeviceMetadataError::PrefetchGit(e))?;
 
     get_device_metadata_from_hudson(&prefetch_git_output.path)
         .map_err(|e| FetchDeviceMetadataError::Hudson(e))
@@ -239,15 +240,21 @@ fn get_rev_of_branch(repo: &Repository, branch: &str) -> Result<String, GetRevOf
 
 #[derive(Debug)]
 enum NixPrefetchGitError {
+    GetRevOfBranch(GetRevOfBranchError),
     IOError(io::Error),
     Parser(serde_json::Error),
 }
 
-fn nix_prefetch_git_repo(repo: &Repository) -> Result<NixPrefetchGitOutput, NixPrefetchGitError> {
+fn nix_prefetch_git_repo(repo: &Repository, branch: &str) -> Result<NixPrefetchGitOutput, NixPrefetchGitError> {
+    let rev = get_rev_of_branch(repo, branch)
+        .map_err(|e| NixPrefetchGitError::GetRevOfBranch(e))?;
+
     let repo_url = repo.url();
     println!("Prefetching {}", &repo_url);
     let output = Command::new("nix-prefetch-git")
         .arg(&repo_url)
+        .arg("--rev")
+        .arg(&rev)
         .output()
         .map_err(|e| NixPrefetchGitError::IOError(e))?;
 
@@ -295,7 +302,7 @@ enum ReadDeviceDirsError {
     Parser(serde_json::Error),
 }
 
-fn read_device_dir_file(path: &str) -> Result<HashMap<String, DeviceDir>, ReadDeviceDirsError> {
+fn read_device_dir_file(path: &str) -> Result<HashMap<String, Option<DeviceDir>>, ReadDeviceDirsError> {
     let file = File::open(path).map_err(|e| ReadDeviceDirsError::ReadFile(e))?;
     let reader = BufReader::new(file);
     
@@ -308,7 +315,7 @@ enum WriteDeviceDirsError {
     WriteToFile(io::Error),
 }
 
-fn write_device_dir_file(path: &str, device_dirs: &HashMap<String, DeviceDir>) -> Result<(), WriteDeviceDirsError> {
+fn write_device_dir_file(path: &str, device_dirs: &HashMap<String, Option<DeviceDir>>) -> Result<(), WriteDeviceDirsError> {
     let device_dirs_json = serde_json::to_string(&device_dirs)
         .map_err(|e| WriteDeviceDirsError::Serialize(e))?;
     let mut device_dirs_file = AtomicWriteFile::options().open(path)
@@ -329,7 +336,7 @@ enum FetchDeviceDirsError {
     WriteFile(WriteDeviceDirsError),
 }
 
-fn incrementally_fetch_device_dirs(devices: &HashMap<String, DeviceMetadata>, device_dirs_path: &str) -> Result<HashMap<String, DeviceDir>, FetchDeviceDirsError> {
+fn incrementally_fetch_device_dirs(devices: &HashMap<String, DeviceMetadata>, branch: &str, device_dirs_path: &str) -> Result<HashMap<String, Option<DeviceDir>>, FetchDeviceDirsError> {
     let mut device_dirs = match read_device_dir_file(device_dirs_path) {
         Ok(dirs) => dirs,
         Err(ReadDeviceDirsError::ReadFile(_)) => {
@@ -347,19 +354,33 @@ fn incrementally_fetch_device_dirs(devices: &HashMap<String, DeviceMetadata>, de
         let device_metadata = devices.get(device_name).unwrap();
 
         if !device_dirs.contains_key(device_name) {
-            device_dirs.insert(device_name.to_string(), DeviceDir {
+            device_dirs.insert(device_name.to_string(), Some(DeviceDir {
                 deps: HashMap::new(),
-            });
+            }));
         }
 
+        if let None = device_dirs.get(device_name).unwrap() {
+            device_dirs.insert(device_name.to_string(), Some(DeviceDir {
+                deps: HashMap::new(),
+            }));
+        }
+
+        let mut branch_present_on_all_repos = true;
         for dep in device_metadata.deps.iter() {
             let path = dep.source_tree_path();
             let is_up_to_date = {
-                let device = device_dirs.get(device_name).unwrap();
+                let device = device_dirs.get(device_name).unwrap().as_ref().unwrap();
 
                 if let Some(args) = device.deps.get(&path) {
-                    let current_rev = get_rev_of_branch(dep, &device_metadata.branch)
-                        .map_err(|e| FetchDeviceDirsError::GetRevOfBranch(e))?;
+                    let current_rev = match get_rev_of_branch(dep, branch) {
+                        Ok(rev) => rev,
+                        Err(GetRevOfBranchError::BranchNotFound) => {
+                            println!("Branch {branch} not present in repository {dep:?}, skipping device {device_name}.");
+                            branch_present_on_all_repos = false;
+                            break;
+                        },
+                        Err(e) => return Err(FetchDeviceDirsError::GetRevOfBranch(e)),
+                    };
                     current_rev == args.rev
                 } else {
                     false
@@ -367,26 +388,41 @@ fn incrementally_fetch_device_dirs(devices: &HashMap<String, DeviceMetadata>, de
             };
 
             if !is_up_to_date {
-                let output = nix_prefetch_git_repo(dep)
-                    .map_err(|e| FetchDeviceDirsError::PrefetchGit(e))?;
+                let output = match nix_prefetch_git_repo(dep, branch) {
+                    Ok(val) => val,
+                    Err(NixPrefetchGitError::GetRevOfBranch(GetRevOfBranchError::BranchNotFound)) => {
+                        // TODO deduplicate this ls-remote operation
+                        println!("Branch {branch} not present in repository {dep:?}, skipping device {device_name}");
+                        branch_present_on_all_repos = false;
+                        break;
+                    },
+                    Err(e) => return Err(FetchDeviceDirsError::PrefetchGit(e)),
+                };
+
                 device_dirs
                     .get_mut(device_name)
+                    .unwrap()
+                    .as_mut()
                     .unwrap()
                     .deps
                     .insert(path, FetchgitArgs::from_prefetch_output(output));
             } else {
-                println!("Device {device_name} is up to date, skipping prefetch.");
+                println!("Repository {dep:?} is up to date, skipping prefetch.");
             }
 
             write_device_dir_file(device_dirs_path, &device_dirs)
                 .map_err(|e| FetchDeviceDirsError::WriteFile(e))?;
+        }
+
+        if !branch_present_on_all_repos {
+            *(device_dirs.get_mut(device_name).unwrap()) = None;
         }
     }
 
     Ok(device_dirs)
 }
 
-fn incrementally_fetch_vendor_dirs(devices: &HashMap<String, DeviceMetadata>, device_dirs: &HashMap<String, DeviceDir>, vendor_dirs_path: &str) -> Result<HashMap<String, DeviceDir>, FetchDeviceDirsError> {
+fn incrementally_fetch_vendor_dirs(devices: &HashMap<String, DeviceMetadata>, branch: &str, device_dirs: &HashMap<String, Option<DeviceDir>>, vendor_dirs_path: &str) -> Result<HashMap<String, Option<DeviceDir>>, FetchDeviceDirsError> {
     let mut vendor_dirs = match read_device_dir_file(vendor_dirs_path) {
         Ok(d) => d,
         Err(ReadDeviceDirsError::ReadFile(_)) => {
@@ -401,6 +437,9 @@ fn incrementally_fetch_vendor_dirs(devices: &HashMap<String, DeviceMetadata>, de
 
 #[derive(Debug, Parser)]
 struct Args {
+    #[arg(long)]
+    branch: String,
+
     #[arg(long)]
     device_metadata_file: String,
 
@@ -431,6 +470,7 @@ fn main() {
         let devices = read_device_metadata(&args.device_metadata_file).unwrap();
         incrementally_fetch_device_dirs(
             &devices,
+            &args.branch,
             args.device_dirs_file.as_ref().expect(&"You need to set --device-dirs-file to specify the location to store the device dirs JSON to")
         ).unwrap();
     };
@@ -442,6 +482,7 @@ fn main() {
         ).unwrap();
         incrementally_fetch_vendor_dirs(
             &devices,
+            &args.branch,
             &device_dirs,
             args.vendor_dirs_file.as_ref().expect(&"You need set --vendor-dirs-file to specify the location to store the vendor dirs JSON to")
         );
