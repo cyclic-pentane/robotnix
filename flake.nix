@@ -46,7 +46,7 @@
 
         cachix
 
-        cargo rustc
+        cargo rustc pkg-config openssl
       ];
       PYTHONPATH=./scripts;
     };

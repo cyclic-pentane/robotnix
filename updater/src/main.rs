@@ -10,6 +10,7 @@ use std::process::Command;
 use serde::{Deserialize, Serialize};
 use serde_json;
 use clap::Parser;
+use git2;
 
 #[derive(Debug, Serialize, Deserialize)]
 enum Variant {
@@ -217,24 +218,22 @@ fn fetch_device_metadata() -> Result<HashMap<String, DeviceMetadata>, FetchDevic
 
 #[derive(Debug)]
 enum GetRevOfBranchError {
-    LsRemote(io::Error),
-    Parser,
+    Libgit(git2::Error),
+    BranchNotFound,
 }
 
 fn get_rev_of_branch(repo: &Repository, branch: &str) -> Result<String, GetRevOfBranchError> {
-    let url = repo.url();
-    println!("ls-remote'ing {}", &url);
-    let output = Command::new("git")
-        .arg("ls-remote")
-        .arg(&url)
-        .arg(format!("refs/heads/{branch}"))
-        .output()
-        .map_err(|e| GetRevOfBranchError::LsRemote(e))?
-        .stdout;
-    Ok(std::str::from_utf8(output.split(|x| x == &b'\t').nth(0)
-        .ok_or(GetRevOfBranchError::Parser)?)
-        .map_err(|_| GetRevOfBranchError::Parser)?
-        .to_string())
+    let mut remote = git2::Remote::create_detached(repo.url())
+        .map_err(|e| GetRevOfBranchError::Libgit(e))?;
+    remote.connect(git2::Direction::Fetch);
+    let list_result = remote.list()
+        .map_err(|e| GetRevOfBranchError::Libgit(e))?;
+    for remote_head in list_result.iter() {
+        if remote_head.name() == format!("refs/heads/{branch}") {
+            return Ok(format!("{:?}", remote_head.oid()))
+        }
+    }
+    Err(GetRevOfBranchError::BranchNotFound)
 }
 
 
