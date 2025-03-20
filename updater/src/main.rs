@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::fs::File;
+use atomic_write_file::AtomicWriteFile;
 use std::io;
 use std::io::Write;
 use std::env;
@@ -257,16 +258,21 @@ fn nix_prefetch_git_repo(repo: &Repository) -> Result<NixPrefetchGitOutput, NixP
 #[derive(Debug)]
 enum FetchDeviceMetadataToError {
     Fetch(FetchDeviceMetadataError),
+    Parser(serde_json::Error),
     FileWrite(io::Error),
 }
 
 fn fetch_device_metadata_to(device_metadata_path: &str) -> Result<(), FetchDeviceMetadataToError> {
     let fetched_device_metadata = fetch_device_metadata()
         .map_err(|e| FetchDeviceMetadataToError::Fetch(e))?;
-    let file = File::create(device_metadata_path)
+    let mut file = AtomicWriteFile::options()
+        .open(device_metadata_path)
         .map_err(|e| FetchDeviceMetadataToError::FileWrite(e))?;
-    let writer = BufWriter::new(file);
-    serde_json::to_writer(writer, &fetched_device_metadata);
+    let buf = serde_json::to_string(&fetched_device_metadata)
+        .map_err(|e| FetchDeviceMetadataToError::Parser(e))?;
+
+    file.write(buf.as_bytes());
+    file.commit();
 
     Ok(())
 }
@@ -306,10 +312,11 @@ enum WriteDeviceDirsError {
 fn write_device_dir_file(path: &str, device_dirs: &HashMap<String, DeviceDir>) -> Result<(), WriteDeviceDirsError> {
     let device_dirs_json = serde_json::to_string(&device_dirs)
         .map_err(|e| WriteDeviceDirsError::Serialize(e))?;
-    let mut device_dirs_file = File::create(path)
+    let mut device_dirs_file = AtomicWriteFile::options().open(path)
         .map_err(|e| WriteDeviceDirsError::WriteToFile(e))?;
     device_dirs_file.write_all(device_dirs_json.as_bytes())
         .map_err(|e| WriteDeviceDirsError::WriteToFile(e))?;
+    device_dirs_file.commit();
 
     Ok(())
 }
