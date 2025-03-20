@@ -308,7 +308,6 @@ fn write_device_dir_file(path: &str, device_dirs: &HashMap<String, DeviceDir>) -
         .map_err(|e| WriteDeviceDirsError::Serialize(e))?;
     let mut device_dirs_file = File::create(path)
         .map_err(|e| WriteDeviceDirsError::WriteToFile(e))?;
-    println!("{device_dirs_file:?}");
     device_dirs_file.write_all(device_dirs_json.as_bytes())
         .map_err(|e| WriteDeviceDirsError::WriteToFile(e))?;
 
