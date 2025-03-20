@@ -139,7 +139,7 @@ enum DeviceMetadataHudsonError {
     HudsonFileRead(io::Error),
     Utf8(std::str::Utf8Error),
     InvalidLineageBuildTargets,
-    ParserError(serde_json::Error),
+    Parser(serde_json::Error),
     ModelNotFoundInUpdaterDir(String),
 }
 
@@ -168,11 +168,11 @@ fn get_device_metadata_from_hudson(hudson_path: &str) -> Result<HashMap<String, 
     let reader = BufReader::new(File::open(format!("{}/updater/devices.json", hudson_path))
         .map_err(|e| DeviceMetadataHudsonError::HudsonFileRead(e))?);
     let hudson_devices: Vec<HudsonDevice> = serde_json::from_reader(reader)
-        .map_err(|e| DeviceMetadataHudsonError::ParserError(e))?;
+        .map_err(|e| DeviceMetadataHudsonError::Parser(e))?;
     let reader = BufReader::new(File::open(format!("{}/updater/device_deps.json", hudson_path))
         .map_err(|e| DeviceMetadataHudsonError::HudsonFileRead(e))?);
     let hudson_device_deps: HashMap<String, Vec<String>> = serde_json::from_reader(reader)
-        .map_err(|e| DeviceMetadataHudsonError::ParserError(e))?;
+        .map_err(|e| DeviceMetadataHudsonError::Parser(e))?;
 
     let mut device_metadata = HashMap::new();
 
@@ -185,7 +185,7 @@ fn get_device_metadata_from_hudson(hudson_path: &str) -> Result<HashMap<String, 
             // We use the json parser for strings like `userdebug` by wrapping them in quotation
             // marks, like `"userdebug"`. This is a dirty hack and I need to figure out how to do
             // this properly at some point.
-            variant: serde_json::from_str(&format!("\"{}\"", variant)).map_err(|e| DeviceMetadataHudsonError::ParserError(e))?,
+            variant: serde_json::from_str(&format!("\"{}\"", variant)).map_err(|e| DeviceMetadataHudsonError::Parser(e))?,
             vendor: hudson_device.oem.to_lowercase(),
             deps: hudson_deps.iter().map(|x| Repository {
                 remote: Remote::LineageOS,
@@ -216,7 +216,7 @@ fn fetch_device_metadata() -> Result<HashMap<String, DeviceMetadata>, FetchDevic
 #[derive(Debug)]
 enum GetRevOfBranchError {
     LsRemote(io::Error),
-    ParserError,
+    Parser,
 }
 
 fn get_rev_of_branch(repo: &Repository, branch: &str) -> Result<String, GetRevOfBranchError> {
@@ -230,8 +230,8 @@ fn get_rev_of_branch(repo: &Repository, branch: &str) -> Result<String, GetRevOf
         .map_err(|e| GetRevOfBranchError::LsRemote(e))?
         .stdout;
     Ok(std::str::from_utf8(output.split(|x| x == &b'\t').nth(0)
-        .ok_or(GetRevOfBranchError::ParserError)?)
-        .map_err(|_| GetRevOfBranchError::ParserError)?
+        .ok_or(GetRevOfBranchError::Parser)?)
+        .map_err(|_| GetRevOfBranchError::Parser)?
         .to_string())
 }
 
@@ -239,7 +239,7 @@ fn get_rev_of_branch(repo: &Repository, branch: &str) -> Result<String, GetRevOf
 #[derive(Debug)]
 enum NixPrefetchGitError {
     IOError(io::Error),
-    ParserError(serde_json::Error),
+    Parser(serde_json::Error),
 }
 
 fn nix_prefetch_git_repo(repo: &Repository) -> Result<NixPrefetchGitOutput, NixPrefetchGitError> {
@@ -250,7 +250,7 @@ fn nix_prefetch_git_repo(repo: &Repository) -> Result<NixPrefetchGitOutput, NixP
         .output()
         .map_err(|e| NixPrefetchGitError::IOError(e))?;
 
-    serde_json::from_slice(&output.stdout).map_err(|e| NixPrefetchGitError::ParserError(e))
+    serde_json::from_slice(&output.stdout).map_err(|e| NixPrefetchGitError::Parser(e))
 }
 
 #[derive(Debug)]
@@ -270,52 +270,94 @@ fn fetch_device_metadata_to(device_metadata_path: &str) -> Result<(), FetchDevic
     Ok(())
 }
 
-fn main() {
-    let args: Vec<String> = env::args().collect();
-    let device_metadata_path = &args[1];
+#[derive(Debug)]
+enum ReadDeviceMetadataError {
+    ReadFile(io::Error),
+    Parser(serde_json::Error),
+}
 
-    fetch_device_metadata_to(device_metadata_path).unwrap();
+fn read_device_metadata(path: &str) -> Result<HashMap<String, DeviceMetadata>, ReadDeviceMetadataError> {
+    let file = File::open(path).map_err(|e| ReadDeviceMetadataError::ReadFile(e))?;
+    let reader = BufReader::new(file);
 
-    let reader = BufReader::new(File::open(device_metadata_path).unwrap());
-    let devices: HashMap<String, DeviceMetadata> = serde_json::from_reader(reader).unwrap();
+    serde_json::from_reader(reader).map_err(|e| ReadDeviceMetadataError::Parser(e))
+}
 
-    // Read pre-existing device_dirs.json for incremental updates.
-    let mut device_dir_entries: HashMap<String, Device> = {
-        let reader = File::open(&args[2]).map(|f| BufReader::new(f));
-        if let Ok(reader) = reader {
-            if let Ok(entries) = serde_json::from_reader(reader) {
-                entries
-            } else {
-                HashMap::new()
-            }
-        } else {
+#[derive(Debug)]
+enum ReadDeviceDirsError {
+    ReadFile(io::Error),
+    Parser(serde_json::Error),
+}
+
+fn read_device_dir_file(path: &str) -> Result<HashMap<String, Device>, ReadDeviceDirsError> {
+    let file = File::open(path).map_err(|e| ReadDeviceDirsError::ReadFile(e))?;
+    let reader = BufReader::new(file);
+    
+    serde_json::from_reader(reader).map_err(|e| ReadDeviceDirsError::Parser(e))
+}
+
+
+#[derive(Debug)]
+enum FetchDeviceDirsError {
+    ReadDeviceDirs(ReadDeviceDirsError),
+    GetRevOfBranch(GetRevOfBranchError),
+    PrefetchGit(NixPrefetchGitError),
+    WriteToFile(io::Error),
+    Serialize(serde_json::Error),
+}
+
+fn incrementally_fetch_device_dirs(devices: &HashMap<String, DeviceMetadata>, device_dirs_path: &str) -> Result<HashMap<String, Device>, FetchDeviceDirsError> {
+    let mut device_dirs = match read_device_dir_file(device_dirs_path) {
+        Ok(dirs) => dirs,
+        Err(ReadDeviceDirsError::ReadFile(_)) => {
+            println!("Could not open {}, starting from scratch...", device_dirs_path);
             HashMap::new()
-        }
+        },
+        Err(e) => return Err(FetchDeviceDirsError::ReadDeviceDirs(e)),
     };
+
     for (device_name, device_metadata) in devices.iter() {
-        if !device_dir_entries.contains_key(device_name) {
-            device_dir_entries.insert(device_name.clone(), Device {
+        if !device_dirs.contains_key(device_name) {
+            device_dirs.insert(device_name.clone(), Device {
                 deps: HashMap::new(),
             });
         }
-        let mut device = device_dir_entries.get_mut(device_name).unwrap();
+        let mut device = device_dirs.get_mut(device_name).unwrap();
 
         for dep in device_metadata.deps.iter() {
             let path = dep.source_tree_path();
             let is_up_to_date = if let Some(args) = device.deps.get(&path) {
-                let current_rev = get_rev_of_branch(dep, &device_metadata.branch).unwrap();
+                let current_rev = get_rev_of_branch(dep, &device_metadata.branch)
+                    .map_err(|e| FetchDeviceDirsError::GetRevOfBranch(e))?;
                 current_rev == args.rev
             } else {
                 false
             };
 
             if !is_up_to_date {
-                let output = nix_prefetch_git_repo(dep).unwrap();
+                let output = nix_prefetch_git_repo(dep)
+                    .map_err(|e| FetchDeviceDirsError::PrefetchGit(e))?;
                 device.deps.insert(path, FetchgitArgs::from_prefetch_output(output));
             }
         }
-        let device_dirs_json = serde_json::to_string(&device_dir_entries).unwrap();
-        let mut device_dirs_file = File::create(&args[2]).unwrap();
+        let device_dirs_json = serde_json::to_string(&device_dirs)
+            .map_err(|e| FetchDeviceDirsError::Serialize(e))?;
+        let mut device_dirs_file = File::create(device_dirs_path)
+            .map_err(|e| FetchDeviceDirsError::WriteToFile(e))?;
         device_dirs_file.write_all(device_dirs_json.as_bytes());
     }
+
+    Ok(device_dirs)
+}
+
+
+fn main() {
+    let args: Vec<String> = env::args().collect();
+    let device_metadata_path = &args[1];
+    let device_dirs_path = &args[2];
+
+    fetch_device_metadata_to(device_metadata_path).unwrap();
+
+    let devices = read_device_metadata(device_metadata_path).unwrap();
+    let device_dirs = incrementally_fetch_device_dirs(&devices, device_dirs_path).unwrap();
 }
