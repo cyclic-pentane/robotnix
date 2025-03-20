@@ -417,6 +417,9 @@ fn incrementally_fetch_device_dirs(devices: &HashMap<String, DeviceMetadata>, br
         if !branch_present_on_all_repos {
             *(device_dirs.get_mut(device_name).unwrap()) = None;
         }
+
+        write_device_dir_file(device_dirs_path, &device_dirs)
+            .map_err(|e| FetchDeviceDirsError::WriteFile(e))?;
     }
 
     Ok(device_dirs)
