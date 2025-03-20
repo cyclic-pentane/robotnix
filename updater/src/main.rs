@@ -8,6 +8,7 @@ use std::io::{BufReader, BufWriter};
 use std::process::Command;
 use serde::{Deserialize, Serialize};
 use serde_json;
+use clap::Parser;
 
 #[derive(Debug, Serialize, Deserialize)]
 enum Variant {
@@ -71,7 +72,7 @@ impl FetchgitArgs {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct Device {
+struct DeviceDir {
     deps: HashMap<String, FetchgitArgs>,
 }
 
@@ -289,7 +290,7 @@ enum ReadDeviceDirsError {
     Parser(serde_json::Error),
 }
 
-fn read_device_dir_file(path: &str) -> Result<HashMap<String, Device>, ReadDeviceDirsError> {
+fn read_device_dir_file(path: &str) -> Result<HashMap<String, DeviceDir>, ReadDeviceDirsError> {
     let file = File::open(path).map_err(|e| ReadDeviceDirsError::ReadFile(e))?;
     let reader = BufReader::new(file);
     
@@ -306,7 +307,7 @@ enum FetchDeviceDirsError {
     Serialize(serde_json::Error),
 }
 
-fn incrementally_fetch_device_dirs(devices: &HashMap<String, DeviceMetadata>, device_dirs_path: &str) -> Result<HashMap<String, Device>, FetchDeviceDirsError> {
+fn incrementally_fetch_device_dirs(devices: &HashMap<String, DeviceMetadata>, device_dirs_path: &str) -> Result<HashMap<String, DeviceDir>, FetchDeviceDirsError> {
     let mut device_dirs = match read_device_dir_file(device_dirs_path) {
         Ok(dirs) => dirs,
         Err(ReadDeviceDirsError::ReadFile(_)) => {
@@ -318,7 +319,7 @@ fn incrementally_fetch_device_dirs(devices: &HashMap<String, DeviceMetadata>, de
 
     for (device_name, device_metadata) in devices.iter() {
         if !device_dirs.contains_key(device_name) {
-            device_dirs.insert(device_name.clone(), Device {
+            device_dirs.insert(device_name.clone(), DeviceDir {
                 deps: HashMap::new(),
             });
         }
@@ -344,20 +345,71 @@ fn incrementally_fetch_device_dirs(devices: &HashMap<String, DeviceMetadata>, de
             .map_err(|e| FetchDeviceDirsError::Serialize(e))?;
         let mut device_dirs_file = File::create(device_dirs_path)
             .map_err(|e| FetchDeviceDirsError::WriteToFile(e))?;
-        device_dirs_file.write_all(device_dirs_json.as_bytes());
+        device_dirs_file.write_all(device_dirs_json.as_bytes())
+            .map_err(|e| FetchDeviceDirsError::WriteToFile(e))?;
     }
 
     Ok(device_dirs)
 }
 
+fn incrementally_fetch_vendor_dirs(devices: &HashMap<String, DeviceMetadata>, device_dirs: &HashMap<String, DeviceDir>, vendor_dirs_path: &str) -> Result<HashMap<String, DeviceDir>, FetchDeviceDirsError> {
+    let mut vendor_dirs = match read_device_dir_file(vendor_dirs_path) {
+        Ok(d) => d,
+        Err(ReadDeviceDirsError::ReadFile(_)) => {
+            println!("Could not open {}, starting from scratch...", vendor_dirs_path);
+            HashMap::new()
+        },
+        Err(e) => return Err(FetchDeviceDirsError::ReadDeviceDirs(e)),
+    };
+
+    Ok(vendor_dirs)
+}
+
+#[derive(Debug, Parser)]
+struct Args {
+    #[arg(long)]
+    device_metadata_file: String,
+
+    #[arg(long)]
+    device_dirs_file: Option<String>,
+    
+    #[arg(long)]
+    vendor_dirs_file: Option<String>,
+
+    #[arg(long)]
+    fetch_device_metadata: bool,
+
+    #[arg(long)]
+    fetch_device_dirs: bool,
+
+    #[arg(long)]
+    fetch_vendor_dirs: bool,
+}
 
 fn main() {
-    let args: Vec<String> = env::args().collect();
-    let device_metadata_path = &args[1];
-    let device_dirs_path = &args[2];
+    let args = Args::parse();
 
-    fetch_device_metadata_to(device_metadata_path).unwrap();
+    if args.fetch_device_metadata {
+        fetch_device_metadata_to(&args.device_metadata_file).unwrap()
+    }
 
-    let devices = read_device_metadata(device_metadata_path).unwrap();
-    let device_dirs = incrementally_fetch_device_dirs(&devices, device_dirs_path).unwrap();
+    if args.fetch_device_dirs {
+        let devices = read_device_metadata(&args.device_metadata_file).unwrap();
+        incrementally_fetch_device_dirs(
+            &devices,
+            args.device_dirs_file.as_ref().expect(&"You need to set --device-dirs-file to specify the location to store the device dirs JSON to")
+        ).unwrap();
+    };
+
+    if args.fetch_vendor_dirs {
+        let devices = read_device_metadata(&args.device_metadata_file).unwrap();
+        let device_dirs = read_device_dir_file(
+            args.device_dirs_file.as_ref().expect(&"You need to set --device-dirs-file to fetch the corresponding vendor dirs")
+        ).unwrap();
+        incrementally_fetch_vendor_dirs(
+            &devices,
+            &device_dirs,
+            args.vendor_dirs_file.as_ref().expect(&"You need set --vendor-dirs-file to specify the location to store the vendor dirs JSON to")
+        );
+    }
 }
