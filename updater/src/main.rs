@@ -308,6 +308,7 @@ fn write_device_dir_file(path: &str, device_dirs: &HashMap<String, DeviceDir>) -
         .map_err(|e| WriteDeviceDirsError::Serialize(e))?;
     let mut device_dirs_file = File::create(path)
         .map_err(|e| WriteDeviceDirsError::WriteToFile(e))?;
+    println!("{device_dirs_file:?}");
     device_dirs_file.write_all(device_dirs_json.as_bytes())
         .map_err(|e| WriteDeviceDirsError::WriteToFile(e))?;
 
@@ -339,27 +340,34 @@ fn incrementally_fetch_device_dirs(devices: &HashMap<String, DeviceMetadata>, de
                 deps: HashMap::new(),
             });
         }
-        let mut device = device_dirs.get_mut(device_name).unwrap();
 
         for dep in device_metadata.deps.iter() {
             let path = dep.source_tree_path();
-            let is_up_to_date = if let Some(args) = device.deps.get(&path) {
-                let current_rev = get_rev_of_branch(dep, &device_metadata.branch)
-                    .map_err(|e| FetchDeviceDirsError::GetRevOfBranch(e))?;
-                current_rev == args.rev
-            } else {
-                false
+            let is_up_to_date = {
+                let device = device_dirs.get(device_name).unwrap();
+
+                if let Some(args) = device.deps.get(&path) {
+                    let current_rev = get_rev_of_branch(dep, &device_metadata.branch)
+                        .map_err(|e| FetchDeviceDirsError::GetRevOfBranch(e))?;
+                    current_rev == args.rev
+                } else {
+                    false
+                }
             };
 
             if !is_up_to_date {
                 let output = nix_prefetch_git_repo(dep)
                     .map_err(|e| FetchDeviceDirsError::PrefetchGit(e))?;
-                device.deps.insert(path, FetchgitArgs::from_prefetch_output(output));
+                device_dirs
+                    .get_mut(device_name)
+                    .unwrap()
+                    .deps
+                    .insert(path, FetchgitArgs::from_prefetch_output(output));
             }
-        }
 
-        write_device_dir_file(device_dirs_path, &device_dirs)
-            .map_err(|e| FetchDeviceDirsError::WriteFile(e))?;
+            write_device_dir_file(device_dirs_path, &device_dirs)
+                .map_err(|e| FetchDeviceDirsError::WriteFile(e))?;
+        }
     }
 
     Ok(device_dirs)
