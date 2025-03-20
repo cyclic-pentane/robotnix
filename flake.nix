@@ -45,6 +45,8 @@
         # cipd git
 
         cachix
+
+        cargo rustc
       ];
       PYTHONPATH=./scripts;
     };
