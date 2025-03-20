@@ -274,7 +274,7 @@ fn fetch_device_metadata_to(device_metadata_path: &str) -> Result<(), FetchDevic
     let mut file = AtomicWriteFile::options()
         .open(device_metadata_path)
         .map_err(|e| FetchDeviceMetadataToError::FileWrite(e))?;
-    let buf = serde_json::to_string(&fetched_device_metadata)
+    let buf = serde_json::to_string_pretty(&fetched_device_metadata)
         .map_err(|e| FetchDeviceMetadataToError::Parser(e))?;
 
     file.write(buf.as_bytes());
@@ -316,7 +316,7 @@ enum WriteDeviceDirsError {
 }
 
 fn write_device_dir_file(path: &str, device_dirs: &HashMap<String, Option<DeviceDir>>) -> Result<(), WriteDeviceDirsError> {
-    let device_dirs_json = serde_json::to_string(&device_dirs)
+    let device_dirs_json = serde_json::to_string_pretty(&device_dirs)
         .map_err(|e| WriteDeviceDirsError::Serialize(e))?;
     let mut device_dirs_file = AtomicWriteFile::options().open(path)
         .map_err(|e| WriteDeviceDirsError::WriteToFile(e))?;
