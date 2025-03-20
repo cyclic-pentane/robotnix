@@ -339,9 +339,15 @@ fn incrementally_fetch_device_dirs(devices: &HashMap<String, DeviceMetadata>, de
         Err(e) => return Err(FetchDeviceDirsError::ReadDeviceDirs(e)),
     };
 
-    for (device_name, device_metadata) in devices.iter() {
+    let mut device_names: Vec<&str> = devices.keys().map(|x| x.as_ref()).collect();
+    device_names.sort();
+
+    for device_name in device_names {
+        println!("At device {device_name}");
+        let device_metadata = devices.get(device_name).unwrap();
+
         if !device_dirs.contains_key(device_name) {
-            device_dirs.insert(device_name.clone(), DeviceDir {
+            device_dirs.insert(device_name.to_string(), DeviceDir {
                 deps: HashMap::new(),
             });
         }
@@ -368,6 +374,8 @@ fn incrementally_fetch_device_dirs(devices: &HashMap<String, DeviceMetadata>, de
                     .unwrap()
                     .deps
                     .insert(path, FetchgitArgs::from_prefetch_output(output));
+            } else {
+                println!("Device {device_name} is up to date, skipping prefetch.");
             }
 
             write_device_dir_file(device_dirs_path, &device_dirs)
