@@ -270,11 +270,11 @@ pub fn incrementally_fetch_device_dirs(devices: &HashMap<String, DeviceMetadata>
         Err(e) => return Err(FetchDeviceDirsError::ReadDeviceDirs(e)),
     };
 
-    let mut device_names: Vec<&str> = devices.keys().map(|x| x.as_ref()).collect();
+    let mut device_names: Vec<String> = devices.keys().map(|x| x.to_string()).collect();
     device_names.sort();
 
-    for device_name in device_names {
-        println!("At device {device_name}");
+    for (i, device_name) in device_names.iter().enumerate() {
+        println!("At device {device_name} ({}/{})", i+1, device_names.len());
         let device_metadata = devices.get(device_name).unwrap();
 
         let recreate = match device_dirs.get(device_name) {
