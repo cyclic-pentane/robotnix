@@ -13,7 +13,7 @@ use fast_xml;
 use crate::base::{
     Variant,
     Repository,
-    Remote,
+    GitRepoProject,
     GetRevOfBranchError,
     NixPrefetchGitError,
     nix_prefetch_git_repo,
@@ -26,8 +26,7 @@ pub struct DeviceMetadata {
     vendor: String,
     name: String,
     variant: Variant,
-    deps: Vec<Repository>,
-    proprietary_deps: Vec<Repository>,
+    deps: Vec<GitRepoProject>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -59,7 +58,7 @@ struct MuppetsManifest {
     projects: Vec<MuppetsRepo>,
 }
 
-fn get_proprietary_repos_for_device(muppets_manifests: &MuppetsManifest, device: &str) -> Vec<Repository> {
+fn get_proprietary_repos_for_device(muppets_manifests: &MuppetsManifest, device: &str) -> Vec<GitRepoProject> {
     let mut repos = vec![];
     for entry in muppets_manifests.projects.iter() {
         let mut found = false;
@@ -71,13 +70,17 @@ fn get_proprietary_repos_for_device(muppets_manifests: &MuppetsManifest, device:
                 }
             }
             if found {
-                let mut path = vec!["proprietary".to_string()];
+                let mut repo_name = "proprietary_".to_string();
                 for c in entry.path.split("/") {
-                    path.push(c.to_string());
+                    repo_name.push_str(c);
+                    repo_name.push('_');
                 }
-                repos.push(Repository {
-                    remote: Remote::TheMuppetsGitHub,
-                    path: path,
+                repos.push(GitRepoProject {
+                    repo: Repository {
+                        url: format!("https://github.com/TheMuppets/{repo_name}"),
+                    },
+                    path: entry.path.clone(),
+                    nonfree: true,
                 });
             }
         }
@@ -100,8 +103,7 @@ pub enum FetchDeviceMetadataError {
 
 pub fn fetch_device_metadata(device_metadata_path: &str) -> Result<HashMap<String, DeviceMetadata>, FetchDeviceMetadataError> {
     let hudson = nix_prefetch_git_repo(&Repository {
-        remote: Remote::LineageOS,
-        path: vec!["hudson".to_string()],
+        url: "https://github.com/LineageOS/hudson".to_string(),
     }, &"main", None).map_err(|e| FetchDeviceMetadataError::PrefetchGit(e))?;
 
     let build_targets = {
@@ -129,8 +131,7 @@ pub fn fetch_device_metadata(device_metadata_path: &str) -> Result<HashMap<Strin
     for (_, _, branch) in build_targets.iter() {
         if !muppets_manifests.contains_key(branch) {
             let muppets = nix_prefetch_git_repo(&Repository {
-                remote: Remote::TheMuppetsGitHub,
-                path: vec!["manifests".to_string()],
+                url: "https://github.com/TheMuppets/manifests".to_string(),
             }, branch, None).map_err(|e| FetchDeviceMetadataError::PrefetchGit(e))?;
 
             let muppets_manifest_xml = fs::read(format!("{}/muppets.xml", &muppets.path()))
@@ -157,6 +158,31 @@ pub fn fetch_device_metadata(device_metadata_path: &str) -> Result<HashMap<Strin
         let hudson_device = hudson_devices.iter().filter(|x| x.model == device).next().ok_or(FetchDeviceMetadataError::ModelNotFoundInUpdaterDir(device.clone()))?;
         let mut hudson_deps = hudson_device_deps.get(&device).ok_or(FetchDeviceMetadataError::ModelNotFoundInUpdaterDir(device.clone()))?.clone();
         hudson_deps.sort();
+
+        let mut projects = vec![];
+        for repo_name in hudson_deps {
+            let path = repo_name
+                .split("_")
+                .skip(1)
+                .collect::<Vec<&str>>()
+                .as_slice()
+                .join("/");
+
+            let project = GitRepoProject {
+                repo: Repository {
+                    url: format!("https://github.com/LineageOS/{repo_name}")
+                },
+                nonfree: false,
+                path: path,
+            };
+            projects.push(project);
+        }
+
+        projects.append(&mut get_proprietary_repos_for_device(
+                muppets_manifests.get(&branch).unwrap(),
+                &device
+        ));
+
         device_metadata.insert(device.clone(), DeviceMetadata { 
             name: hudson_device.name.clone(),
             branch: branch.clone(),
@@ -165,11 +191,7 @@ pub fn fetch_device_metadata(device_metadata_path: &str) -> Result<HashMap<Strin
             // this properly at some point.
             variant: serde_json::from_str(&format!("\"{}\"", variant)).map_err(|e| FetchDeviceMetadataError::Parser(e))?,
             vendor: hudson_device.oem.to_lowercase(),
-            deps: hudson_deps.iter().map(|x| Repository {
-                remote: Remote::LineageOS,
-                path: x.split("_").map(|x| x.to_string()).collect(),
-            }).collect(),
-            proprietary_deps: get_proprietary_repos_for_device(&muppets_manifests.get(&branch).unwrap(), &device),
+            deps: projects,
         });
     }
 
@@ -179,8 +201,8 @@ pub fn fetch_device_metadata(device_metadata_path: &str) -> Result<HashMap<Strin
     let buf = serde_json::to_string_pretty(&device_metadata)
         .map_err(|e| FetchDeviceMetadataError::Parser(e))?;
 
-    file.write(buf.as_bytes());
-    file.commit();
+    file.write(buf.as_bytes()).map_err(|e| FetchDeviceMetadataError::FileWrite(e))?;
+    file.commit().map_err(|e| FetchDeviceMetadataError::FileWrite(e));
 
     Ok(device_metadata)
 }
@@ -264,7 +286,7 @@ pub fn incrementally_fetch_device_dirs(devices: &HashMap<String, DeviceMetadata>
         let mut branch_present_on_all_repos = true;
         for dep in device_metadata.deps.iter() {
             let fetchgit_args = match nix_prefetch_git_repo(
-                dep,
+                &dep.repo,
                 branch,
                 device_dirs
                     .get(device_name)
@@ -272,13 +294,13 @@ pub fn incrementally_fetch_device_dirs(devices: &HashMap<String, DeviceMetadata>
                     .as_ref()
                     .unwrap()
                     .deps
-                    .get(&dep.source_tree_path())
+                    .get(&dep.path)
                     .cloned()
             ) {
                 Ok(val) => val,
                 Err(NixPrefetchGitError::GetRevOfBranch(GetRevOfBranchError::BranchNotFound)) => {
                     // TODO deduplicate this ls-remote operation
-                    println!("Branch {branch} not present in repository {dep:?}, skipping device {device_name}");
+                    println!("Branch {branch} not present in repository {:?}, skipping device {device_name}", dep.repo);
                     branch_present_on_all_repos = false;
                     break;
                 },
@@ -291,7 +313,7 @@ pub fn incrementally_fetch_device_dirs(devices: &HashMap<String, DeviceMetadata>
                 .as_mut()
                 .unwrap()
                 .deps
-                .insert(dep.source_tree_path(), fetchgit_args);
+                .insert(dep.path.clone(), fetchgit_args);
 
             write_device_dir_file(device_dirs_path, &device_dirs)
                 .map_err(|e| FetchDeviceDirsError::WriteFile(e))?;

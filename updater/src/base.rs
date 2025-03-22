@@ -36,43 +36,15 @@ impl FetchgitArgs {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub enum Remote {
-    LineageOS,
-    TheMuppetsGitHub,
-    TheMuppetsGitLab
+pub struct Repository {
+    pub url: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Repository {
-    pub remote: Remote,
-    pub path: Vec<String>
-}
-
-impl Remote {
-    pub fn base_url(&self) -> String {
-        match self {
-            Remote::LineageOS => "https://github.com/LineageOS",
-            Remote::TheMuppetsGitHub => "https://github.com/TheMuppets",
-            Remote::TheMuppetsGitLab => "https://gitlab.com/TheMuppets"
-        }.to_string()
-    }
-}
-
-impl Repository {
-    pub fn url(&self) -> String {
-        format!("{}/{}", &self.remote.base_url(), &self.path.join("_"))
-    }
-
-    // Path of the git repository within the AOSP source tree. For instance,
-    // android_device_fairphone_FP4 has the source tree path device/fairphone/FP4
-    pub fn source_tree_path(&self) -> String {
-        match self.path.get(0).map(|x| x.as_str()) {
-            Some("android") => &self.path[1..],
-            Some("proprietary") => &self.path[1..],
-            Some(_) => panic!("Not implemented yet"),
-            None => panic!("Empty path")
-        }.join("/")
-    }
+pub struct GitRepoProject {
+    pub repo: Repository,
+    pub path: String,
+    pub nonfree: bool,
 }
 
 #[derive(Debug)]
@@ -82,9 +54,10 @@ pub enum GetRevOfBranchError {
 }
 
 pub fn get_rev_of_branch(repo: &Repository, branch: &str) -> Result<String, GetRevOfBranchError> {
-    let mut remote = git2::Remote::create_detached(repo.url())
+    let mut remote = git2::Remote::create_detached(repo.url.clone())
         .map_err(|e| GetRevOfBranchError::Libgit(e))?;
-    remote.connect(git2::Direction::Fetch);
+    remote.connect(git2::Direction::Fetch)
+        .map_err(|e| GetRevOfBranchError::Libgit(e))?;
     let list_result = remote.list()
         .map_err(|e| GetRevOfBranchError::Libgit(e))?;
     for remote_head in list_result.iter() {
@@ -114,10 +87,9 @@ pub fn nix_prefetch_git_repo(repo: &Repository, branch: &str, prev: Option<Fetch
     };
 
     if fetch {
-        let repo_url = repo.url();
-        println!("Prefetching {repo_url} (branch {branch})");
+        println!("Prefetching {} (branch {branch})", repo.url);
         let output = Command::new("nix-prefetch-git")
-            .arg(&repo_url)
+            .arg(&repo.url)
             .arg("--rev")
             .arg(&rev)
             .output()
