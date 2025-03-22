@@ -35,12 +35,12 @@ impl FetchgitArgs {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
 pub struct Repository {
     pub url: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
 pub struct GitRepoProject {
     pub repo: Repository,
     pub path: String,
@@ -77,7 +77,7 @@ pub enum NixPrefetchGitError {
 }
 
 pub fn nix_prefetch_git_repo(repo: &Repository, branch: &str, prev: Option<FetchgitArgs>) -> Result<FetchgitArgs, NixPrefetchGitError> {
-    println!("Prefetching {} (branch {branch})", repo.url);
+    //println!("Prefetching {} (branch {branch})", repo.url);
 
     let rev = get_rev_of_branch(repo, branch)
         .map_err(|e| NixPrefetchGitError::GetRevOfBranch(e))?;

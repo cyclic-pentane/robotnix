@@ -1,11 +1,14 @@
 mod base;
 mod lineage;
+mod repo_lockfile;
 
 use clap::Parser;
-use lineage::{
+use crate::lineage::{
     read_device_metadata,
     fetch_device_metadata,
-    incrementally_fetch_device_dirs,
+};
+use crate::repo_lockfile::{
+    incrementally_fetch_projects,
 };
 
 #[derive(Debug, Parser)]
@@ -42,11 +45,22 @@ fn main() {
     }
 
     if args.fetch_device_dirs {
+        let branch = &args.branch
+            .expect("You need to specify the branch to fetch device dirs for with --branch");
+        let device_dirs_file = &args.device_dirs_file
+            .expect("You need to specify the path to write the device dir file to with --device-dir-file");
         let devices = read_device_metadata(&args.device_metadata_file).unwrap();
-        incrementally_fetch_device_dirs(
-            &devices,
-            &args.branch.expect(&"You need to specify the branch to fetch device dirs for with --branch"),
-            args.device_dirs_file.as_ref().expect(&"You need to set --device-dirs-file to specify the location to store the device dirs JSON to")
-        ).unwrap();
+        let mut device_dirs = vec![];
+        let mut device_names: Vec<String> = devices.keys().map(|x| x.to_string()).collect();
+        device_names.sort();
+        for device_name in device_names {
+            for device_dir in devices[&device_name].deps.iter() {
+                if !device_dirs.contains(device_dir) {
+                    device_dirs.push(device_dir.clone());
+                }
+            }
+        }
+
+        incrementally_fetch_projects(&device_dirs_file, &device_dirs, &branch).unwrap();
     };
 }

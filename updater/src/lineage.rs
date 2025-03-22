@@ -14,7 +14,6 @@ use crate::base::{
     Variant,
     Repository,
     GitRepoProject,
-    GetRevOfBranchError,
     NixPrefetchGitError,
     nix_prefetch_git_repo,
     FetchgitArgs,
@@ -22,11 +21,11 @@ use crate::base::{
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DeviceMetadata {
-    branch: String,
-    vendor: String,
-    name: String,
-    variant: Variant,
-    deps: Vec<GitRepoProject>,
+    pub branch: String,
+    pub vendor: String,
+    pub name: String,
+    pub variant: Variant,
+    pub deps: Vec<GitRepoProject>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -102,6 +101,7 @@ pub enum FetchDeviceMetadataError {
 }
 
 pub fn fetch_device_metadata(device_metadata_path: &str) -> Result<HashMap<String, DeviceMetadata>, FetchDeviceMetadataError> {
+    println!("Fetching LineageOS hudson...");
     let hudson = nix_prefetch_git_repo(&Repository {
         url: "https://github.com/LineageOS/hudson".to_string(),
     }, &"main", None).map_err(|e| FetchDeviceMetadataError::PrefetchGit(e))?;
@@ -130,6 +130,7 @@ pub fn fetch_device_metadata(device_metadata_path: &str) -> Result<HashMap<Strin
     let mut muppets_manifests = HashMap::new();
     for (_, _, branch) in build_targets.iter() {
         if !muppets_manifests.contains_key(branch) {
+            println!("Fetching TheMuppets manifest (branch {branch})...");
             let muppets = nix_prefetch_git_repo(&Repository {
                 url: "https://github.com/TheMuppets/manifests".to_string(),
             }, branch, None).map_err(|e| FetchDeviceMetadataError::PrefetchGit(e))?;
@@ -219,119 +220,4 @@ pub fn read_device_metadata(path: &str) -> Result<HashMap<String, DeviceMetadata
     let reader = BufReader::new(file);
 
     serde_json::from_reader(reader).map_err(|e| ReadDeviceMetadataError::Parser(e))
-}
-
-#[derive(Debug)]
-pub enum ReadDeviceDirsError {
-    ReadFile(io::Error),
-    Parser(serde_json::Error),
-}
-
-pub fn read_device_dir_file(path: &str) -> Result<HashMap<String, Option<DeviceDir>>, ReadDeviceDirsError> {
-    let file = File::open(path).map_err(|e| ReadDeviceDirsError::ReadFile(e))?;
-    let reader = BufReader::new(file);
-    
-    serde_json::from_reader(reader).map_err(|e| ReadDeviceDirsError::Parser(e))
-}
-
-#[derive(Debug)]
-pub enum WriteDeviceDirsError {
-    Serialize(serde_json::Error),
-    WriteToFile(io::Error),
-}
-
-pub fn write_device_dir_file(path: &str, device_dirs: &HashMap<String, Option<DeviceDir>>) -> Result<(), WriteDeviceDirsError> {
-    let device_dirs_json = serde_json::to_string_pretty(&device_dirs)
-        .map_err(|e| WriteDeviceDirsError::Serialize(e))?;
-    let mut device_dirs_file = AtomicWriteFile::options().open(path)
-        .map_err(|e| WriteDeviceDirsError::WriteToFile(e))?;
-    device_dirs_file.write_all(device_dirs_json.as_bytes())
-        .map_err(|e| WriteDeviceDirsError::WriteToFile(e))?;
-    device_dirs_file.commit().map_err(|e| WriteDeviceDirsError::WriteToFile(e))?;
-
-    Ok(())
-}
-
-
-#[derive(Debug)]
-pub enum FetchDeviceDirsError {
-    ReadDeviceDirs(ReadDeviceDirsError),
-    PrefetchGit(NixPrefetchGitError),
-    WriteFile(WriteDeviceDirsError),
-}
-
-pub fn incrementally_fetch_device_dirs(devices: &HashMap<String, DeviceMetadata>, branch: &str, device_dirs_path: &str) -> Result<HashMap<String, Option<DeviceDir>>, FetchDeviceDirsError> {
-    let mut device_dirs = match read_device_dir_file(device_dirs_path) {
-        Ok(dirs) => dirs,
-        Err(ReadDeviceDirsError::ReadFile(_)) => {
-            println!("Could not open {}, starting from scratch...", device_dirs_path);
-            HashMap::new()
-        },
-        Err(e) => return Err(FetchDeviceDirsError::ReadDeviceDirs(e)),
-    };
-
-    let mut device_names: Vec<String> = devices.keys().map(|x| x.to_string()).collect();
-    device_names.sort();
-
-    for (i, device_name) in device_names.iter().enumerate() {
-        println!("At device {device_name} ({}/{})", i+1, device_names.len());
-        let device_metadata = devices.get(device_name).unwrap();
-
-        let recreate = match device_dirs.get(device_name) {
-            None => true,
-            Some(None) => true,
-            Some(Some(_)) => false,
-        };
-
-        if recreate {
-            device_dirs.insert(device_name.to_string(), Some(DeviceDir {
-                deps: HashMap::new(),
-            }));
-        }
-
-        let mut branch_present_on_all_repos = true;
-        for dep in device_metadata.deps.iter() {
-            let fetchgit_args = match nix_prefetch_git_repo(
-                &dep.repo,
-                branch,
-                device_dirs
-                    .get(device_name)
-                    .unwrap()
-                    .as_ref()
-                    .unwrap()
-                    .deps
-                    .get(&dep.path)
-                    .cloned()
-            ) {
-                Ok(val) => val,
-                Err(NixPrefetchGitError::GetRevOfBranch(GetRevOfBranchError::BranchNotFound)) => {
-                    // TODO deduplicate this ls-remote operation
-                    println!("Branch {branch} not present in repository {:?}, skipping device {device_name}", dep.repo);
-                    branch_present_on_all_repos = false;
-                    break;
-                },
-                Err(e) => return Err(FetchDeviceDirsError::PrefetchGit(e)),
-            };
-
-            device_dirs
-                .get_mut(device_name)
-                .unwrap()
-                .as_mut()
-                .unwrap()
-                .deps
-                .insert(dep.path.clone(), fetchgit_args);
-
-            write_device_dir_file(device_dirs_path, &device_dirs)
-                .map_err(|e| FetchDeviceDirsError::WriteFile(e))?;
-        }
-
-        if !branch_present_on_all_repos {
-            *(device_dirs.get_mut(device_name).unwrap()) = None;
-        }
-
-        write_device_dir_file(device_dirs_path, &device_dirs)
-            .map_err(|e| FetchDeviceDirsError::WriteFile(e))?;
-    }
-
-    Ok(device_dirs)
 }
