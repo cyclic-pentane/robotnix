@@ -149,6 +149,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fast-xml"
+version = "0.23.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f7ffc2f9e1373cd82b4d4ce2f84f8162edd48e3932abeb19c06170b66dbbd6c"
+dependencies = [
+ "memchr",
+ "serde",
+]
+
+[[package]]
 name = "form_urlencoded"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -524,6 +534,7 @@ version = "0.1.0"
 dependencies = [
  "atomic-write-file",
  "clap",
+ "fast-xml",
  "git2",
  "serde",
  "serde_json",

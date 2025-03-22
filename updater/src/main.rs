@@ -38,7 +38,10 @@ fn main() {
     let args = Args::parse();
 
     if args.fetch_device_metadata {
-        fetch_device_metadata_to(&args.device_metadata_file).unwrap()
+        fetch_device_metadata_to(
+            &args.device_metadata_file,
+            &args.branch,
+        ).unwrap()
     }
 
     if args.fetch_device_dirs {
