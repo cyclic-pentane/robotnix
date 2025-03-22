@@ -202,7 +202,7 @@ pub fn fetch_device_metadata(device_metadata_path: &str) -> Result<HashMap<Strin
         .map_err(|e| FetchDeviceMetadataError::Parser(e))?;
 
     file.write(buf.as_bytes()).map_err(|e| FetchDeviceMetadataError::FileWrite(e))?;
-    file.commit().map_err(|e| FetchDeviceMetadataError::FileWrite(e));
+    file.commit().map_err(|e| FetchDeviceMetadataError::FileWrite(e))?;
 
     Ok(device_metadata)
 }
@@ -247,7 +247,7 @@ pub fn write_device_dir_file(path: &str, device_dirs: &HashMap<String, Option<De
         .map_err(|e| WriteDeviceDirsError::WriteToFile(e))?;
     device_dirs_file.write_all(device_dirs_json.as_bytes())
         .map_err(|e| WriteDeviceDirsError::WriteToFile(e))?;
-    device_dirs_file.commit();
+    device_dirs_file.commit().map_err(|e| WriteDeviceDirsError::WriteToFile(e))?;
 
     Ok(())
 }
