@@ -70,10 +70,10 @@ fn get_proprietary_repos_for_device(muppets_manifests: &MuppetsManifest, device:
                 }
             }
             if found {
-                let mut repo_name = "proprietary_".to_string();
+                let mut repo_name = "proprietary".to_string();
                 for c in entry.path.split("/") {
-                    repo_name.push_str(c);
                     repo_name.push('_');
+                    repo_name.push_str(c);
                 }
                 repos.push(GitRepoProject {
                     repo: Repository {
