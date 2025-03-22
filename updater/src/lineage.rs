@@ -277,7 +277,13 @@ pub fn incrementally_fetch_device_dirs(devices: &HashMap<String, DeviceMetadata>
         println!("At device {device_name}");
         let device_metadata = devices.get(device_name).unwrap();
 
-        if !device_dirs.contains_key(device_name) {
+        let recreate = match device_dirs.get(device_name) {
+            None => true,
+            Some(None) => true,
+            Some(Some(_)) => false,
+        };
+
+        if recreate {
             device_dirs.insert(device_name.to_string(), Some(DeviceDir {
                 deps: HashMap::new(),
             }));
