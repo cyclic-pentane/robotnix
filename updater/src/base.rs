@@ -77,6 +77,8 @@ pub enum NixPrefetchGitError {
 }
 
 pub fn nix_prefetch_git_repo(repo: &Repository, branch: &str, prev: Option<FetchgitArgs>) -> Result<FetchgitArgs, NixPrefetchGitError> {
+    println!("Prefetching {} (branch {branch})", repo.url);
+
     let rev = get_rev_of_branch(repo, branch)
         .map_err(|e| NixPrefetchGitError::GetRevOfBranch(e))?;
     
@@ -87,7 +89,6 @@ pub fn nix_prefetch_git_repo(repo: &Repository, branch: &str, prev: Option<Fetch
     };
 
     if fetch {
-        println!("Prefetching {} (branch {branch})", repo.url);
         let output = Command::new("nix-prefetch-git")
             .arg(&repo.url)
             .arg("--rev")
