@@ -59,18 +59,6 @@ impl Remote {
 }
 
 impl Repository {
-    pub fn new_device_repo(vendor: &str, device: &str) -> Repository {
-        Repository {
-            remote: Remote::LineageOS,
-            path: vec![
-                "android".to_string(),
-                "device".to_string(),
-                vendor.to_string(),
-                device.to_string()
-            ]
-        }
-    }
-
     pub fn url(&self) -> String {
         format!("{}/{}", &self.remote.base_url(), &self.path.join("_"))
     }
@@ -127,7 +115,7 @@ pub fn nix_prefetch_git_repo(repo: &Repository, branch: &str, prev: Option<Fetch
 
     if fetch {
         let repo_url = repo.url();
-        println!("Prefetching {}", &repo_url);
+        println!("Prefetching {repo_url} (branch {branch})");
         let output = Command::new("nix-prefetch-git")
             .arg(&repo_url)
             .arg("--rev")

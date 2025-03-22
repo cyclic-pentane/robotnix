@@ -27,7 +27,7 @@ pub struct DeviceMetadata {
     name: String,
     variant: Variant,
     deps: Vec<Repository>,
-    proprietary_deps: Vec<Repository>
+    proprietary_deps: Vec<Repository>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -47,7 +47,7 @@ struct HudsonDevice {
 struct MuppetsRepo {
     name: String,
     path: String,
-    groups: String,
+    groups: Option<String>,
     #[serde(rename = "clone-depth")]
     clone_depth: u32,
 }
@@ -63,21 +63,23 @@ fn get_proprietary_repos_for_device(muppets_manifests: &MuppetsManifest, device:
     let mut repos = vec![];
     for entry in muppets_manifests.projects.iter() {
         let mut found = false;
-        for m_group in entry.groups.split(",") {
-            if m_group == format!("muppets_{device}") {
-                found = true;
-                break;
+        if let Some(groups) = &entry.groups {
+            for m_group in groups.split(",") {
+                if m_group == format!("muppets_{device}") {
+                    found = true;
+                    break;
+                }
             }
-        }
-        if found {
-            let mut path = vec!["proprietary".to_string()];
-            for c in entry.path.split("/") {
-                path.push(c.to_string());
+            if found {
+                let mut path = vec!["proprietary".to_string()];
+                for c in entry.path.split("/") {
+                    path.push(c.to_string());
+                }
+                repos.push(Repository {
+                    remote: Remote::TheMuppetsGitHub,
+                    path: path,
+                });
             }
-            repos.push(Repository {
-                remote: Remote::TheMuppetsGitHub,
-                path: path,
-            });
         }
     }
 
@@ -85,8 +87,10 @@ fn get_proprietary_repos_for_device(muppets_manifests: &MuppetsManifest, device:
 }
 
 #[derive(Debug)]
-enum GetDeviceMetadataError {
+pub enum FetchDeviceMetadataError {
+    PrefetchGit(NixPrefetchGitError),
     FileRead(io::Error),
+    FileWrite(io::Error),
     ParseMuppetsManifest(fast_xml::de::DeError),
     Utf8(std::str::Utf8Error),
     InvalidLineageBuildTargets,
@@ -94,27 +98,26 @@ enum GetDeviceMetadataError {
     ModelNotFoundInUpdaterDir(String),
 }
 
-fn get_device_metadata(hudson_path: &str, muppets_manifests_path: &str) -> Result<HashMap<String, DeviceMetadata>, GetDeviceMetadataError> {
-    let muppets_manifest_xml = fs::read(format!("{muppets_manifests_path}/muppets.xml"))
-        .map_err(|e| GetDeviceMetadataError::FileRead(e))?;
-    let muppets_manifest: MuppetsManifest = fast_xml::de::from_str(
-        &str::from_utf8(&muppets_manifest_xml).map_err(|e| GetDeviceMetadataError::Utf8(e))?
-    ).map_err(|e| GetDeviceMetadataError::ParseMuppetsManifest(e))?;
+pub fn fetch_device_metadata(device_metadata_path: &str) -> Result<HashMap<String, DeviceMetadata>, FetchDeviceMetadataError> {
+    let hudson = nix_prefetch_git_repo(&Repository {
+        remote: Remote::LineageOS,
+        path: vec!["hudson".to_string()],
+    }, &"main", None).map_err(|e| FetchDeviceMetadataError::PrefetchGit(e))?;
 
     let build_targets = {
-        let text_bytes = fs::read(format!("{hudson_path}/lineage-build-targets"))
-            .map_err(|e| GetDeviceMetadataError::FileRead(e))?;
+        let text_bytes = fs::read(format!("{}/lineage-build-targets", &hudson.path()))
+            .map_err(|e| FetchDeviceMetadataError::FileRead(e))?;
         let text = std::str::from_utf8(&text_bytes)
-            .map_err(|e| GetDeviceMetadataError::Utf8(e))?;
+            .map_err(|e| FetchDeviceMetadataError::Utf8(e))?;
         let mut build_targets = vec![];
         for line in text.split("\n") {
             if line.starts_with("#") || line == "" {
                 continue;
             }
             let fields: Vec<&str> = line.split(" ").collect();
-            let device  = fields.get(0).ok_or(GetDeviceMetadataError::InvalidLineageBuildTargets)?.to_string();
-            let variant = fields.get(1).ok_or(GetDeviceMetadataError::InvalidLineageBuildTargets)?.to_string();
-            let branch  = fields.get(2).ok_or(GetDeviceMetadataError::InvalidLineageBuildTargets)?.to_string();
+            let device  = fields.get(0).ok_or(FetchDeviceMetadataError::InvalidLineageBuildTargets)?.to_string();
+            let variant = fields.get(1).ok_or(FetchDeviceMetadataError::InvalidLineageBuildTargets)?.to_string();
+            let branch  = fields.get(2).ok_or(FetchDeviceMetadataError::InvalidLineageBuildTargets)?.to_string();
 
             build_targets.push((device, variant, branch));
         }
@@ -122,72 +125,66 @@ fn get_device_metadata(hudson_path: &str, muppets_manifests_path: &str) -> Resul
         build_targets
     };
 
-    let reader = BufReader::new(File::open(format!("{}/updater/devices.json", hudson_path))
-        .map_err(|e| GetDeviceMetadataError::FileRead(e))?);
+    let mut muppets_manifests = HashMap::new();
+    for (_, _, branch) in build_targets.iter() {
+        if !muppets_manifests.contains_key(branch) {
+            let muppets = nix_prefetch_git_repo(&Repository {
+                remote: Remote::TheMuppetsGitHub,
+                path: vec!["manifests".to_string()],
+            }, branch, None).map_err(|e| FetchDeviceMetadataError::PrefetchGit(e))?;
+
+            let muppets_manifest_xml = fs::read(format!("{}/muppets.xml", &muppets.path()))
+                .map_err(|e| FetchDeviceMetadataError::FileRead(e))?;
+            let muppets_manifest: MuppetsManifest = fast_xml::de::from_str(
+                &str::from_utf8(&muppets_manifest_xml).map_err(|e| FetchDeviceMetadataError::Utf8(e))?
+            ).map_err(|e| FetchDeviceMetadataError::ParseMuppetsManifest(e))?;
+            muppets_manifests.insert(branch.clone(), muppets_manifest);
+        }
+    }
+
+    let reader = BufReader::new(File::open(format!("{}/updater/devices.json", &hudson.path()))
+        .map_err(|e| FetchDeviceMetadataError::FileRead(e))?);
     let hudson_devices: Vec<HudsonDevice> = serde_json::from_reader(reader)
-        .map_err(|e| GetDeviceMetadataError::Parser(e))?;
-    let reader = BufReader::new(File::open(format!("{}/updater/device_deps.json", hudson_path))
-        .map_err(|e| GetDeviceMetadataError::FileRead(e))?);
+        .map_err(|e| FetchDeviceMetadataError::Parser(e))?;
+    let reader = BufReader::new(File::open(format!("{}/updater/device_deps.json", &hudson.path()))
+        .map_err(|e| FetchDeviceMetadataError::FileRead(e))?);
     let hudson_device_deps: HashMap<String, Vec<String>> = serde_json::from_reader(reader)
-        .map_err(|e| GetDeviceMetadataError::Parser(e))?;
+        .map_err(|e| FetchDeviceMetadataError::Parser(e))?;
 
     let mut device_metadata = HashMap::new();
 
     for (device, variant, branch) in build_targets {
-        let hudson_device = hudson_devices.iter().filter(|x| x.model == device).next().ok_or(GetDeviceMetadataError::ModelNotFoundInUpdaterDir(device.clone()))?;
-        let mut hudson_deps = hudson_device_deps.get(&device).ok_or(GetDeviceMetadataError::ModelNotFoundInUpdaterDir(device.clone()))?.clone();
+        let hudson_device = hudson_devices.iter().filter(|x| x.model == device).next().ok_or(FetchDeviceMetadataError::ModelNotFoundInUpdaterDir(device.clone()))?;
+        let mut hudson_deps = hudson_device_deps.get(&device).ok_or(FetchDeviceMetadataError::ModelNotFoundInUpdaterDir(device.clone()))?.clone();
         hudson_deps.sort();
         device_metadata.insert(device.clone(), DeviceMetadata { 
             name: hudson_device.name.clone(),
-            branch: branch,
-            // We use the json parser for strings like `userdebug` by wrapping them in quotation
+            branch: branch.clone(),
+            // TODO We use the json parser for strings like `userdebug` by wrapping them in quotation
             // marks, like `"userdebug"`. This is a dirty hack and I need to figure out how to do
             // this properly at some point.
-            variant: serde_json::from_str(&format!("\"{}\"", variant)).map_err(|e| GetDeviceMetadataError::Parser(e))?,
+            variant: serde_json::from_str(&format!("\"{}\"", variant)).map_err(|e| FetchDeviceMetadataError::Parser(e))?,
             vendor: hudson_device.oem.to_lowercase(),
             deps: hudson_deps.iter().map(|x| Repository {
                 remote: Remote::LineageOS,
                 path: x.split("_").map(|x| x.to_string()).collect(),
             }).collect(),
-            proprietary_deps: get_proprietary_repos_for_device(&muppets_manifest, &device),
+            proprietary_deps: get_proprietary_repos_for_device(&muppets_manifests.get(&branch).unwrap(), &device),
         });
     }
 
-    Ok(device_metadata)
-}
-
-#[derive(Debug)]
-pub enum FetchDeviceMetadataError {
-    PrefetchGit(NixPrefetchGitError),
-    Hudson(GetDeviceMetadataError),
-    Parser(serde_json::Error),
-    FileWrite(io::Error),
-}
-
-pub fn fetch_device_metadata_to(device_metadata_path: &str, branch: &str) -> Result<(), FetchDeviceMetadataError> {
-    let hudson = nix_prefetch_git_repo(&Repository {
-        remote: Remote::LineageOS,
-        path: vec!["hudson".to_string()],
-    }, &"main", None).map_err(|e| FetchDeviceMetadataError::PrefetchGit(e))?;
-
-    let muppets_manifests = nix_prefetch_git_repo(&Repository {
-        remote: Remote::TheMuppetsGitHub,
-        path: vec!["manifests".to_string()],
-    }, branch, None).map_err(|e| FetchDeviceMetadataError::PrefetchGit(e))?;
-
-    let metadata = get_device_metadata(&hudson.path(), &muppets_manifests.path())
-        .map_err(|e| FetchDeviceMetadataError::Hudson(e))?;
     let mut file = AtomicWriteFile::options()
         .open(device_metadata_path)
         .map_err(|e| FetchDeviceMetadataError::FileWrite(e))?;
-    let buf = serde_json::to_string_pretty(&metadata)
+    let buf = serde_json::to_string_pretty(&device_metadata)
         .map_err(|e| FetchDeviceMetadataError::Parser(e))?;
 
     file.write(buf.as_bytes());
     file.commit();
 
-    Ok(())
+    Ok(device_metadata)
 }
+
 
 #[derive(Debug)]
 pub enum ReadDeviceMetadataError {
@@ -237,7 +234,6 @@ pub fn write_device_dir_file(path: &str, device_dirs: &HashMap<String, Option<De
 #[derive(Debug)]
 pub enum FetchDeviceDirsError {
     ReadDeviceDirs(ReadDeviceDirsError),
-    GetRevOfBranch(GetRevOfBranchError),
     PrefetchGit(NixPrefetchGitError),
     WriteFile(WriteDeviceDirsError),
 }
@@ -310,17 +306,4 @@ pub fn incrementally_fetch_device_dirs(devices: &HashMap<String, DeviceMetadata>
     }
 
     Ok(device_dirs)
-}
-
-pub fn incrementally_fetch_vendor_dirs(devices: &HashMap<String, DeviceMetadata>, branch: &str, device_dirs: &HashMap<String, Option<DeviceDir>>, vendor_dirs_path: &str) -> Result<HashMap<String, Option<DeviceDir>>, FetchDeviceDirsError> {
-    let mut vendor_dirs = match read_device_dir_file(vendor_dirs_path) {
-        Ok(d) => d,
-        Err(ReadDeviceDirsError::ReadFile(_)) => {
-            println!("Could not open {}, starting from scratch...", vendor_dirs_path);
-            HashMap::new()
-        },
-        Err(e) => return Err(FetchDeviceDirsError::ReadDeviceDirs(e)),
-    };
-
-    Ok(vendor_dirs)
 }
