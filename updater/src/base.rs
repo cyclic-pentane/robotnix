@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io;
 use std::process::Command;
 use serde::{Serialize, Deserialize};
@@ -41,10 +42,18 @@ pub struct Repository {
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
-pub struct GitRepoProject {
+pub struct RepoProjectBranchSettings {
+    pub branch: String,
+    pub linkfiles: HashMap<String, String>, // dst -> src
+    pub copyfiles: HashMap<String, String>, // dst -> src
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
+pub struct RepoProject {
     pub repo: Repository,
     pub path: String,
     pub nonfree: bool,
+    pub branch_settings: HashMap<String, RepoProjectBranchSettings>, // global_branch -> branch_info
 }
 
 #[derive(Debug)]
@@ -67,7 +76,6 @@ pub fn get_rev_of_branch(repo: &Repository, branch: &str) -> Result<String, GetR
     }
     Err(GetRevOfBranchError::BranchNotFound)
 }
-
 
 #[derive(Debug)]
 pub enum NixPrefetchGitError {

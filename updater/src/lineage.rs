@@ -8,12 +8,13 @@ use std::io::Write;
 use std::io::BufReader;
 use serde::{Serialize, Deserialize};
 use serde_json;
-use fast_xml;
+use quick_xml;
 
 use crate::base::{
     Variant,
     Repository,
-    GitRepoProject,
+    RepoProject,
+    RepoProjectBranchSettings,
     NixPrefetchGitError,
     nix_prefetch_git_repo,
     FetchgitArgs,
@@ -25,7 +26,7 @@ pub struct DeviceMetadata {
     pub vendor: String,
     pub name: String,
     pub variant: Variant,
-    pub deps: Vec<GitRepoProject>,
+    pub deps: Vec<RepoProject>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -43,10 +44,13 @@ struct HudsonDevice {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename = "project")]
 struct MuppetsRepo {
+    #[serde(rename = "@name")]
     name: String,
+    #[serde(rename = "@path")]
     path: String,
+    #[serde(rename = "@groups")]
     groups: Option<String>,
-    #[serde(rename = "clone-depth")]
+    #[serde(rename = "@clone-depth")]
     clone_depth: u32,
 }
 
@@ -57,7 +61,7 @@ struct MuppetsManifest {
     projects: Vec<MuppetsRepo>,
 }
 
-fn get_proprietary_repos_for_device(muppets_manifests: &MuppetsManifest, device: &str) -> Vec<GitRepoProject> {
+fn get_proprietary_repos_for_device(muppets_manifests: &MuppetsManifest, device: &str, branch: &str) -> Vec<RepoProject> {
     let mut repos = vec![];
     for entry in muppets_manifests.projects.iter() {
         let mut found = false;
@@ -74,12 +78,21 @@ fn get_proprietary_repos_for_device(muppets_manifests: &MuppetsManifest, device:
                     repo_name.push('_');
                     repo_name.push_str(c);
                 }
-                repos.push(GitRepoProject {
+                repos.push(RepoProject {
                     repo: Repository {
                         url: format!("https://github.com/TheMuppets/{repo_name}"),
                     },
                     path: entry.path.clone(),
                     nonfree: true,
+                    branch_settings: {
+                        let mut branch_settings = HashMap::new();
+                        branch_settings.insert(branch.to_string(), RepoProjectBranchSettings {
+                            branch: branch.to_string(),
+                            linkfiles: HashMap::new(),
+                            copyfiles: HashMap::new(),
+                        });
+                        branch_settings
+                    },
                 });
             }
         }
@@ -93,14 +106,15 @@ pub enum FetchDeviceMetadataError {
     PrefetchGit(NixPrefetchGitError),
     FileRead(io::Error),
     FileWrite(io::Error),
-    ParseMuppetsManifest(fast_xml::de::DeError),
+    ParseMuppetsManifest(quick_xml::errors::serialize::DeError),
     Utf8(std::str::Utf8Error),
     InvalidLineageBuildTargets,
     Parser(serde_json::Error),
     ModelNotFoundInUpdaterDir(String),
+    UnknownBranch(String),
 }
 
-pub fn fetch_device_metadata(device_metadata_path: &str) -> Result<HashMap<String, DeviceMetadata>, FetchDeviceMetadataError> {
+pub fn fetch_device_metadata(device_metadata_path: &str, branch: &str) -> Result<HashMap<String, DeviceMetadata>, FetchDeviceMetadataError> {
     println!("Fetching LineageOS hudson...");
     let hudson = nix_prefetch_git_repo(&Repository {
         url: "https://github.com/LineageOS/hudson".to_string(),
@@ -137,7 +151,7 @@ pub fn fetch_device_metadata(device_metadata_path: &str) -> Result<HashMap<Strin
 
             let muppets_manifest_xml = fs::read(format!("{}/muppets.xml", &muppets.path()))
                 .map_err(|e| FetchDeviceMetadataError::FileRead(e))?;
-            let muppets_manifest: MuppetsManifest = fast_xml::de::from_str(
+            let muppets_manifest: MuppetsManifest = quick_xml::de::from_str(
                 &str::from_utf8(&muppets_manifest_xml).map_err(|e| FetchDeviceMetadataError::Utf8(e))?
             ).map_err(|e| FetchDeviceMetadataError::ParseMuppetsManifest(e))?;
             muppets_manifests.insert(branch.clone(), muppets_manifest);
@@ -169,19 +183,29 @@ pub fn fetch_device_metadata(device_metadata_path: &str) -> Result<HashMap<Strin
                 .as_slice()
                 .join("/");
 
-            let project = GitRepoProject {
+            let project = RepoProject {
                 repo: Repository {
                     url: format!("https://github.com/LineageOS/{repo_name}")
                 },
                 nonfree: false,
                 path: path,
+                branch_settings: {
+                    let mut branch_settings = HashMap::new();
+                    branch_settings.insert(branch.clone(), RepoProjectBranchSettings {
+                        branch: branch.clone(),
+                        copyfiles: HashMap::new(),
+                        linkfiles: HashMap::new(),
+                    });
+                    branch_settings
+                },
             };
             projects.push(project);
         }
 
         projects.append(&mut get_proprietary_repos_for_device(
                 muppets_manifests.get(&branch).unwrap(),
-                &device
+                &device,
+                &branch,
         ));
 
         device_metadata.insert(device.clone(), DeviceMetadata { 

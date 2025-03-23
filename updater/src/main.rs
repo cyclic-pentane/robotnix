@@ -1,8 +1,10 @@
 mod base;
 mod lineage;
+mod repo_manifest;
 mod repo_lockfile;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
+use crate::base::Repository;
 use crate::lineage::{
     read_device_metadata,
     fetch_device_metadata,
@@ -13,54 +15,53 @@ use crate::repo_lockfile::{
 
 #[derive(Debug, Parser)]
 struct Args {
-    #[arg(long)]
-    branch: Option<String>,
+    #[command(subcommand)]
+    command: Option<Command>,
+}
 
-    #[arg(long)]
-    device_metadata_file: String,
+#[derive(Debug, Subcommand)]
+enum Command {
+    FetchRepoMetadata {
+        #[arg(name = "branch", short, long)]
+        branches: Vec<String>,
 
-    #[arg(long)]
-    device_dirs_file: Option<String>,
-    
-    #[arg(long)]
-    vendor_dirs_file: Option<String>,
+        repo_metadata_file: String,
+    },
+    FetchDeviceMetadata {
+        #[arg(name = "branch", short, long)]
+        branch: String,
+        device_metadata_file: String,
+    },
+    FetchDeviceDirs {
+        #[arg(long)]
+        device_metadata_file: String,
 
-    #[arg(long)]
-    fetch_device_metadata: bool,
+        #[arg(short, long)]
+        branch: String,
 
-    #[arg(long)]
-    fetch_device_dirs: bool,
-
-    #[arg(long)]
-    fetch_vendor_dirs: bool,
+        device_dirs_file: String,
+    }
 }
 
 fn main() {
     let args = Args::parse();
 
-    if args.fetch_device_metadata {
-        fetch_device_metadata(
-            &args.device_metadata_file,
-        ).unwrap();
+
+    match args.command.expect("You need to specify a command.") {
+        Command::FetchRepoMetadata { branches, repo_metadata_file } => {
+            fetch_git_repo_metadata(
+                &repo_metadata_file,
+                &Repository {
+                    url: "https://github.com/LineageOS/android".to_string(),
+                },
+                &branches
+            ).unwrap();
+        },
+        Command::FetchDeviceMetadata { branch, device_metadata_file } => {
+            fetch_device_metadata(
+                &device_metadata_file,
+                &branch,
+            ).unwrap();
+        },
     }
-
-    if args.fetch_device_dirs {
-        let branch = &args.branch
-            .expect("You need to specify the branch to fetch device dirs for with --branch");
-        let device_dirs_file = &args.device_dirs_file
-            .expect("You need to specify the path to write the device dir file to with --device-dir-file");
-        let devices = read_device_metadata(&args.device_metadata_file).unwrap();
-        let mut device_dirs = vec![];
-        let mut device_names: Vec<String> = devices.keys().map(|x| x.to_string()).collect();
-        device_names.sort();
-        for device_name in device_names {
-            for device_dir in devices[&device_name].deps.iter() {
-                if !device_dirs.contains(device_dir) {
-                    device_dirs.push(device_dir.clone());
-                }
-            }
-        }
-
-        incrementally_fetch_projects(&device_dirs_file, &device_dirs, &branch).unwrap();
-    };
 }

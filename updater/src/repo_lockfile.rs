@@ -7,7 +7,7 @@ use serde_json;
 use atomic_write_file::AtomicWriteFile;
 
 use crate::base::{
-    GitRepoProject,
+    RepoProject,
     FetchgitArgs,
     nix_prefetch_git_repo,
     NixPrefetchGitError,
@@ -43,7 +43,7 @@ pub enum IncrementallyFetchReposError {
     SaveLockfile(SaveRepoLockfileError),
 }
 
-pub fn incrementally_fetch_projects(filename: &str, projects: &[GitRepoProject], branch: &str) -> Result<RepoLockfile, IncrementallyFetchReposError> {
+pub fn incrementally_fetch_projects(filename: &str, projects: &[RepoProject], branch: &str) -> Result<RepoLockfile, IncrementallyFetchReposError> {
     let mut lockfile: RepoLockfile = match fs::read(filename) {
         Ok(lockfile_json) => {
             let lockfile_json_str = str::from_utf8(&lockfile_json)
