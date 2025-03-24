@@ -130,8 +130,15 @@ struct LineageDependency {
 
 fn fetch_lineage_dependencies(vendor: &str, device_name: &str, branch: &str) -> Result<Vec<LineageDependency>, FetchDeviceMetadataError> {
     // Currently, we need to infer the vendor code from the human-readable vendor name (e.g.
-    // `bananapi` from "Banana Pi".
-    let vendor_name = vendor.to_lowercase().replace(" ", "");
+    // `bananapi` from "Banana Pi". It would be cool to programmatically pull this from somewhere
+    // though.
+    let mut vendor_name = vendor.to_lowercase().replace(" ", "");
+    if device_name == "deadpool" || device_name == "wade" || device_name == "dopinder" {
+        vendor_name = "askey".to_string();
+    } else if device_name == "deb" || device_name == "debx" {
+        vendor_name = "asus".to_string();
+    }
+
     println!("Fetching device repo android_device_{vendor_name}_{device_name} (branch {branch})...");
     let device_repo = nix_prefetch_git_repo(&Repository {
         url: format!("https://github.com/LineageOS/android_device_{vendor_name}_{device_name}"),
