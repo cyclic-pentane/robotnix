@@ -187,7 +187,7 @@ fn get_remote_specs_from_manifest(manifest: &GitRepoManifest, root_url: &str) ->
                         .split("/")
                         .map(|x| x.to_string())
                         .collect();
-                    url_parts[0..url_parts.len()-1].join("/")
+                    url_parts[0..url_parts.len()-2].join("/")
                 }
             },
             default_ref: default_ref.map(|x| x.to_string()),
