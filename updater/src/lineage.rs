@@ -79,15 +79,15 @@ fn get_proprietary_repos_for_device(muppets_manifests: &MuppetsManifest, device:
                     repo_name.push_str(c);
                 }
                 repos.push(RepoProject {
-                    repo: Repository {
-                        url: format!("https://github.com/TheMuppets/{repo_name}"),
-                    },
                     path: entry.path.clone(),
                     nonfree: true,
                     branch_settings: {
                         let mut branch_settings = HashMap::new();
                         branch_settings.insert(branch.to_string(), RepoProjectBranchSettings {
-                            branch: branch.to_string(),
+                            repo: Repository {
+                                url: format!("https://github.com/TheMuppets/{repo_name}"),
+                            },
+                            git_ref: format!("refs/heads/{branch}"),
                             linkfiles: HashMap::new(),
                             copyfiles: HashMap::new(),
                         });
@@ -114,7 +114,7 @@ pub enum FetchDeviceMetadataError {
     UnknownBranch(String),
 }
 
-pub fn fetch_device_metadata(device_metadata_path: &str, branch: &str) -> Result<HashMap<String, DeviceMetadata>, FetchDeviceMetadataError> {
+pub fn fetch_device_metadata(device_metadata_path: &str) -> Result<HashMap<String, DeviceMetadata>, FetchDeviceMetadataError> {
     println!("Fetching LineageOS hudson...");
     let hudson = nix_prefetch_git_repo(&Repository {
         url: "https://github.com/LineageOS/hudson".to_string(),
@@ -184,15 +184,15 @@ pub fn fetch_device_metadata(device_metadata_path: &str, branch: &str) -> Result
                 .join("/");
 
             let project = RepoProject {
-                repo: Repository {
-                    url: format!("https://github.com/LineageOS/{repo_name}")
-                },
                 nonfree: false,
                 path: path,
                 branch_settings: {
                     let mut branch_settings = HashMap::new();
                     branch_settings.insert(branch.clone(), RepoProjectBranchSettings {
-                        branch: branch.clone(),
+                        repo: Repository {
+                            url: format!("https://github.com/LineageOS/{repo_name}")
+                        },
+                        git_ref: format!("refs/heads/{branch}"),
                         copyfiles: HashMap::new(),
                         linkfiles: HashMap::new(),
                     });

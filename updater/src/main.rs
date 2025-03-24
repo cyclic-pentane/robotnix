@@ -46,7 +46,6 @@ enum Command {
 fn main() {
     let args = Args::parse();
 
-
     match args.command.expect("You need to specify a command.") {
         Command::FetchRepoMetadata { branches, repo_metadata_file } => {
             fetch_git_repo_metadata(
@@ -58,10 +57,7 @@ fn main() {
             ).unwrap();
         },
         Command::FetchDeviceMetadata { branch, device_metadata_file } => {
-            fetch_device_metadata(
-                &device_metadata_file,
-                &branch,
-            ).unwrap();
+            fetch_device_metadata(&device_metadata_file).unwrap();
         },
     }
 }

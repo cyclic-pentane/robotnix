@@ -58,17 +58,21 @@ pub fn incrementally_fetch_projects(filename: &str, projects: &[RepoProject], br
     };
 
     for (i, project) in projects.iter().enumerate() {
-        println!("Fetching repo {} ({}/{})", &project.repo.url, i+1, projects.len());
+        let repo = match project.branch_settings.get(branch) {
+            Some(settings) => &settings.repo,
+            None => continue,
+        };
+        println!("Fetching repo {} ({}/{})", repo.url, i+1, projects.len());
         let old = if let Some(Some(fetchgit_args)) = lockfile.get(&project.path) {
             Some(fetchgit_args.clone())
         } else {
             None
         };
 
-        let new = match nix_prefetch_git_repo(&project.repo, branch, old) {
+        let new = match nix_prefetch_git_repo(repo, branch, old) {
             Ok(args) => Some(args),
             Err(NixPrefetchGitError::GetRevOfBranch(GetRevOfBranchError::BranchNotFound)) => {
-                println!("Repo {} not available for branch {}, skipping.", &project.repo.url, &branch);
+                println!("Repo {} not available for branch {}, skipping.", repo.url, &branch);
                 None
             },
             Err(e) => return Err(IncrementallyFetchReposError::NixPrefetch(e)),

@@ -43,14 +43,14 @@ pub struct Repository {
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
 pub struct RepoProjectBranchSettings {
-    pub branch: String,
+    pub repo: Repository,
+    pub git_ref: String,
     pub linkfiles: HashMap<String, String>, // dst -> src
     pub copyfiles: HashMap<String, String>, // dst -> src
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
 pub struct RepoProject {
-    pub repo: Repository,
     pub path: String,
     pub nonfree: bool,
     pub branch_settings: HashMap<String, RepoProjectBranchSettings>, // global_branch -> branch_info
