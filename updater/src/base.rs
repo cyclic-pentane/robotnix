@@ -70,6 +70,13 @@ pub fn get_rev_of_ref(repo: &Repository, git_ref: &str) -> Result<String, GetRev
     if is_commit_hash(&git_ref) {
         return Ok(git_ref.to_string());
     }
+    let git_ref = {
+        if !git_ref.starts_with("refs/") {
+            format!("refs/heads/{git_ref}")
+        } else {
+            git_ref.to_string()
+        }
+    };
 
     let mut remote = git2::Remote::create_detached(repo.url.clone())
         .map_err(|e| GetRevOfBranchError::Libgit(e))?;
@@ -82,7 +89,7 @@ pub fn get_rev_of_ref(repo: &Repository, git_ref: &str) -> Result<String, GetRev
             return Ok(format!("{:?}", remote_head.oid()))
         }
     }
-    Err(GetRevOfBranchError::BranchNotFound(git_ref.to_string()))
+    Err(GetRevOfBranchError::BranchNotFound(git_ref))
 }
 
 #[derive(Debug)]
