@@ -29,7 +29,6 @@ enum Command {
     },
     FetchDeviceMetadata {
         #[arg(name = "branch", short, long)]
-        branch: String,
         device_metadata_file: String,
     },
     FetchDeviceDirs {
@@ -56,7 +55,7 @@ fn main() {
                 &branches
             ).unwrap();
         },
-        Command::FetchDeviceMetadata { branch, device_metadata_file } => {
+        Command::FetchDeviceMetadata { device_metadata_file } => {
             fetch_device_metadata(&device_metadata_file).unwrap();
         },
     }
