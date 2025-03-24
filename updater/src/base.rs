@@ -59,7 +59,7 @@ pub struct RepoProject {
 #[derive(Debug)]
 pub enum GetRevOfBranchError {
     Libgit(git2::Error),
-    BranchNotFound,
+    BranchNotFound(String),
 }
 
 fn is_commit_hash(git_ref: &str) -> bool {
@@ -82,7 +82,7 @@ pub fn get_rev_of_ref(repo: &Repository, git_ref: &str) -> Result<String, GetRev
             return Ok(format!("{:?}", remote_head.oid()))
         }
     }
-    Err(GetRevOfBranchError::BranchNotFound)
+    Err(GetRevOfBranchError::BranchNotFound(git_ref.to_string()))
 }
 
 #[derive(Debug)]
