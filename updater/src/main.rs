@@ -9,6 +9,9 @@ use crate::lineage::{
     read_device_metadata,
     fetch_device_metadata,
 };
+use crate::repo_manifest::{
+    fetch_git_repo_metadata,
+};
 use crate::repo_lockfile::{
     incrementally_fetch_projects,
 };
@@ -28,7 +31,6 @@ enum Command {
         repo_metadata_file: String,
     },
     FetchDeviceMetadata {
-        #[arg(name = "branch", short, long)]
         device_metadata_file: String,
     },
     FetchDeviceDirs {
@@ -57,6 +59,21 @@ fn main() {
         },
         Command::FetchDeviceMetadata { device_metadata_file } => {
             fetch_device_metadata(&device_metadata_file).unwrap();
+        },
+        Command::FetchDeviceDirs { device_metadata_file, branch, device_dirs_file } => {
+            let devices = read_device_metadata(&device_metadata_file).unwrap();
+            let mut device_dirs = vec![];
+            let mut device_names: Vec<String> = devices.keys().map(|x| x.to_string()).collect();
+            device_names.sort();
+            for device_name in device_names {
+                for device_dir in devices[&device_name].deps.iter() {
+                    if !device_dirs.contains(device_dir) {
+                        device_dirs.push(device_dir.clone());
+                    }
+                }
+            }
+
+            incrementally_fetch_projects(&device_dirs_file, &device_dirs, &branch).unwrap();
         },
     }
 }
