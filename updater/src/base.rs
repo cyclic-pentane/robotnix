@@ -62,7 +62,15 @@ pub enum GetRevOfBranchError {
     BranchNotFound,
 }
 
+fn is_commit_hash(git_ref: &str) -> bool {
+    git_ref.len() == 40 && git_ref.chars().all(|x| x.is_ascii_hexdigit())
+}
+
 pub fn get_rev_of_ref(repo: &Repository, git_ref: &str) -> Result<String, GetRevOfBranchError> {
+    if is_commit_hash(&git_ref) {
+        return Ok(git_ref.to_string());
+    }
+
     let mut remote = git2::Remote::create_detached(repo.url.clone())
         .map_err(|e| GetRevOfBranchError::Libgit(e))?;
     remote.connect(git2::Direction::Fetch)
