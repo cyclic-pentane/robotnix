@@ -120,7 +120,7 @@ pub enum ReadManifestError {
     MoreThanOneDefaultRemote,
 }
 
-fn read_manifest_file(manifest_path: &Path, filename: &Path) -> Result<GitRepoManifest, ReadManifestError> {
+pub fn read_manifest_file(manifest_path: &Path, filename: &Path) -> Result<GitRepoManifest, ReadManifestError> {
     let manifest_xml_bytes = fs::read(manifest_path.join(filename))
         .map_err(|e| ReadManifestError::FileRead(e))?;
 

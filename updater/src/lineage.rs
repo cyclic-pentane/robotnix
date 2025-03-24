@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::str;
 use std::fs;
 use std::fs::File;
+use std::path::Path;
 use atomic_write_file::AtomicWriteFile;
 use std::io;
 use std::io::Write;
@@ -20,7 +21,11 @@ use crate::base::{
     FetchgitArgs,
 };
 
-use crate::repo_manifest::GitRepoManifest;
+use crate::repo_manifest::{
+    GitRepoManifest,
+    read_manifest_file,
+    ReadManifestError,
+};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DeviceMetadata {
@@ -88,7 +93,7 @@ pub enum FetchDeviceMetadataError {
     PrefetchGit(NixPrefetchGitError),
     FileRead(io::Error),
     FileWrite(io::Error),
-    ParseMuppetsManifest(quick_xml::errors::serialize::DeError),
+    ReadMuppetsManifest(ReadManifestError),
     Utf8(std::str::Utf8Error),
     InvalidLineageBuildTargets,
     Parser(serde_json::Error),
@@ -105,11 +110,8 @@ fn fetch_muppets_manifests_for_branches(branches: &[String]) -> Result<HashMap<S
                 url: "https://github.com/TheMuppets/manifests".to_string(),
             }, &format!("refs/heads/{branch}"), None).map_err(|e| FetchDeviceMetadataError::PrefetchGit(e))?;
 
-            let muppets_manifest_xml = fs::read(format!("{}/muppets.xml", &muppets.path()))
-                .map_err(|e| FetchDeviceMetadataError::FileRead(e))?;
-            let muppets_manifest: GitRepoManifest = quick_xml::de::from_str(
-                &str::from_utf8(&muppets_manifest_xml).map_err(|e| FetchDeviceMetadataError::Utf8(e))?
-            ).map_err(|e| FetchDeviceMetadataError::ParseMuppetsManifest(e))?;
+            let muppets_manifest = read_manifest_file(Path::new(&muppets.path()), Path::new(&muppets.path()))
+                .map_err(|e| FetchDeviceMetadataError::ReadMuppetsManifest(e))?;
             muppets_manifests.insert(branch.clone(), muppets_manifest);
         }
     }
