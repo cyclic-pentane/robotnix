@@ -110,7 +110,7 @@ fn fetch_muppets_manifests_for_branches(branches: &[String]) -> Result<HashMap<S
                 url: "https://github.com/TheMuppets/manifests".to_string(),
             }, &format!("refs/heads/{branch}"), None).map_err(|e| FetchDeviceMetadataError::PrefetchGit(e))?;
 
-            let muppets_manifest = read_manifest_file(Path::new(&muppets.path()), Path::new(&muppets.path()))
+            let muppets_manifest = read_manifest_file(Path::new(&muppets.path()), Path::new("muppets.xml"))
                 .map_err(|e| FetchDeviceMetadataError::ReadMuppetsManifest(e))?;
             muppets_manifests.insert(branch.clone(), muppets_manifest);
         }
