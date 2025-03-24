@@ -41,6 +41,7 @@ pub enum IncrementallyFetchReposError {
     Parser(serde_json::Error),
     NixPrefetch(NixPrefetchGitError),
     SaveLockfile(SaveRepoLockfileError),
+    BranchNotFoundInProject(String),
 }
 
 pub fn incrementally_fetch_projects(filename: &str, projects: &[RepoProject], branch: &str) -> Result<RepoLockfile, IncrementallyFetchReposError> {
@@ -69,12 +70,13 @@ pub fn incrementally_fetch_projects(filename: &str, projects: &[RepoProject], br
             None
         };
 
-        let new = match nix_prefetch_git_repo(repo, branch, old) {
+        let git_ref = &project.branch_settings
+            .get(branch)
+            .as_ref()
+            .ok_or(IncrementallyFetchReposError::BranchNotFoundInProject(project.path.clone()))?
+            .git_ref;
+        let new = match nix_prefetch_git_repo(repo, git_ref, old) {
             Ok(args) => Some(args),
-            Err(NixPrefetchGitError::GetRevOfBranch(GetRevOfBranchError::BranchNotFound)) => {
-                println!("Repo {} not available for branch {}, skipping.", repo.url, &branch);
-                None
-            },
             Err(e) => return Err(IncrementallyFetchReposError::NixPrefetch(e)),
         };
 

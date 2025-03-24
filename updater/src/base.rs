@@ -62,7 +62,7 @@ pub enum GetRevOfBranchError {
     BranchNotFound,
 }
 
-pub fn get_rev_of_branch(repo: &Repository, branch: &str) -> Result<String, GetRevOfBranchError> {
+pub fn get_rev_of_ref(repo: &Repository, git_ref: &str) -> Result<String, GetRevOfBranchError> {
     let mut remote = git2::Remote::create_detached(repo.url.clone())
         .map_err(|e| GetRevOfBranchError::Libgit(e))?;
     remote.connect(git2::Direction::Fetch)
@@ -70,7 +70,7 @@ pub fn get_rev_of_branch(repo: &Repository, branch: &str) -> Result<String, GetR
     let list_result = remote.list()
         .map_err(|e| GetRevOfBranchError::Libgit(e))?;
     for remote_head in list_result.iter() {
-        if remote_head.name() == format!("refs/heads/{branch}") {
+        if remote_head.name() == git_ref {
             return Ok(format!("{:?}", remote_head.oid()))
         }
     }
@@ -84,10 +84,8 @@ pub enum NixPrefetchGitError {
     Parser(serde_json::Error),
 }
 
-pub fn nix_prefetch_git_repo(repo: &Repository, branch: &str, prev: Option<FetchgitArgs>) -> Result<FetchgitArgs, NixPrefetchGitError> {
-    //println!("Prefetching {} (branch {branch})", repo.url);
-
-    let rev = get_rev_of_branch(repo, branch)
+pub fn nix_prefetch_git_repo(repo: &Repository, git_ref: &str, prev: Option<FetchgitArgs>) -> Result<FetchgitArgs, NixPrefetchGitError> {
+    let rev = get_rev_of_ref(repo, git_ref)
         .map_err(|e| NixPrefetchGitError::GetRevOfBranch(e))?;
     
     let fetch = if let Some(ref fetchgit_args) = prev {

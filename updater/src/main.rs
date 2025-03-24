@@ -1,10 +1,16 @@
+use std::str;
+use std::fs;
+use clap::{Parser, Subcommand};
+
 mod base;
 mod lineage;
 mod repo_manifest;
 mod repo_lockfile;
 
-use clap::{Parser, Subcommand};
-use crate::base::Repository;
+use crate::base::{
+    Repository,
+    RepoProject
+};
 use crate::lineage::{
     read_device_metadata,
     fetch_device_metadata,
@@ -30,6 +36,15 @@ enum Command {
 
         repo_metadata_file: String,
     },
+    FetchRepoDirs {
+        #[arg(short, long)]
+        branch: String,
+
+        #[arg(long)]
+        repo_metadata_file: String,
+
+        repo_dirs_file: String,
+    },
     FetchDeviceMetadata {
         device_metadata_file: String,
     },
@@ -41,7 +56,7 @@ enum Command {
         branch: String,
 
         device_dirs_file: String,
-    }
+    },
 }
 
 fn main() {
@@ -74,6 +89,14 @@ fn main() {
             }
 
             incrementally_fetch_projects(&device_dirs_file, &device_dirs, &branch).unwrap();
+        },
+        Command::FetchRepoDirs { branch, repo_metadata_file, repo_dirs_file } => {
+            let repo_dirs_json = fs::read(&repo_metadata_file).unwrap();
+            let repo_dirs: Vec<RepoProject> = serde_json::from_str(
+                str::from_utf8(&repo_dirs_json).unwrap()
+            ).unwrap();
+
+            incrementally_fetch_projects(&repo_dirs_file, &repo_dirs, &branch).unwrap();
         },
     }
 }

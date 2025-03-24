@@ -118,7 +118,7 @@ pub fn fetch_device_metadata(device_metadata_path: &str) -> Result<HashMap<Strin
     println!("Fetching LineageOS hudson...");
     let hudson = nix_prefetch_git_repo(&Repository {
         url: "https://github.com/LineageOS/hudson".to_string(),
-    }, &"main", None).map_err(|e| FetchDeviceMetadataError::PrefetchGit(e))?;
+    }, &"refs/heads/main", None).map_err(|e| FetchDeviceMetadataError::PrefetchGit(e))?;
 
     let build_targets = {
         let text_bytes = fs::read(format!("{}/lineage-build-targets", &hudson.path()))
@@ -147,7 +147,7 @@ pub fn fetch_device_metadata(device_metadata_path: &str) -> Result<HashMap<Strin
             println!("Fetching TheMuppets manifest (branch {branch})...");
             let muppets = nix_prefetch_git_repo(&Repository {
                 url: "https://github.com/TheMuppets/manifests".to_string(),
-            }, branch, None).map_err(|e| FetchDeviceMetadataError::PrefetchGit(e))?;
+            }, &format!("refs/heads/{branch}"), None).map_err(|e| FetchDeviceMetadataError::PrefetchGit(e))?;
 
             let muppets_manifest_xml = fs::read(format!("{}/muppets.xml", &muppets.path()))
                 .map_err(|e| FetchDeviceMetadataError::FileRead(e))?;
