@@ -33,7 +33,7 @@ pub struct GitRepoRemote {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct GitRepoDefaultRemote {
+pub struct GitRepoDefaultRemote {
     #[serde(rename = "@remote")]
     remote: String,
 
@@ -48,7 +48,7 @@ struct GitRepoDefaultRemote {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct GitRepoLinkfile {
+pub struct GitRepoLinkfile {
     #[serde(rename = "@src")]
     src: String,
 
@@ -57,7 +57,7 @@ struct GitRepoLinkfile {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct GitRepoCopyfile {
+pub struct GitRepoCopyfile {
     #[serde(rename = "@src")]
     src: String,
 
@@ -66,50 +66,50 @@ struct GitRepoCopyfile {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct GitRepoProject {
+pub struct GitRepoProject {
     #[serde(rename = "@path")]
-    path: String,
+    pub path: String,
 
     #[serde(rename = "@name")]
-    repo_name: String,
+    pub repo_name: String,
 
     #[serde(rename = "@groups")]
-    groups: Option<String>,
+    pub groups: Option<String>,
 
     #[serde(rename = "@remote")]
-    remote: Option<String>,
+    pub remote: Option<String>,
 
     #[serde(rename = "@revision")]
-    git_ref: Option<String>,
+    pub git_ref: Option<String>,
 
     #[serde(rename = "linkfile", default)]
-    linkfiles: Vec<GitRepoLinkfile>,
+    pub linkfiles: Vec<GitRepoLinkfile>,
 
     #[serde(rename = "copyfile", default)]
-    copyfiles: Vec<GitRepoCopyfile>,
+    pub copyfiles: Vec<GitRepoCopyfile>,
 }
 
 // TODO use Path and PathBuf everywhere where they're applicable
 #[derive(Debug, Serialize, Deserialize)]
-struct GitRepoInclude {
+pub struct GitRepoInclude {
     #[serde(rename = "@name")]
     name: PathBuf,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename = "manifest")]
-struct GitRepoManifest {
+pub struct GitRepoManifest {
     #[serde(default, rename = "remote")]
-    remotes: Vec<GitRepoRemote>,
+    pub remotes: Vec<GitRepoRemote>,
 
     #[serde(rename = "default")]
-    default_remote: Option<GitRepoDefaultRemote>,
+    pub default_remote: Option<GitRepoDefaultRemote>,
 
     #[serde(rename = "project", default)]
-    projects: Vec<GitRepoProject>,
+    pub projects: Vec<GitRepoProject>,
 
     #[serde(rename = "include", default)]
-    includes: Vec<GitRepoInclude>,
+    pub includes: Vec<GitRepoInclude>,
 }
 
 #[derive(Debug)]

@@ -20,6 +20,8 @@ use crate::base::{
     FetchgitArgs,
 };
 
+use crate::repo_manifest::GitRepoManifest;
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DeviceMetadata {
     pub branch: String,
@@ -41,27 +43,7 @@ struct HudsonDevice {
     name: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename = "project")]
-struct MuppetsRepo {
-    #[serde(rename = "@name")]
-    name: String,
-    #[serde(rename = "@path")]
-    path: String,
-    #[serde(rename = "@groups")]
-    groups: Option<String>,
-    #[serde(rename = "@clone-depth")]
-    clone_depth: u32,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename = "manifest")]
-struct MuppetsManifest {
-    #[serde(rename = "project", default)]
-    projects: Vec<MuppetsRepo>,
-}
-
-fn get_proprietary_repos_for_device(muppets_manifests: &MuppetsManifest, device: &str, branch: &str) -> Vec<RepoProject> {
+fn get_proprietary_repos_for_device(muppets_manifests: &GitRepoManifest, device: &str, branch: &str) -> Vec<RepoProject> {
     let mut repos = vec![];
     for entry in muppets_manifests.projects.iter() {
         let mut found = false;
@@ -114,6 +96,27 @@ pub enum FetchDeviceMetadataError {
     UnknownBranch(String),
 }
 
+fn fetch_muppets_manifests_for_branches(branches: &[String]) -> Result<HashMap<String, GitRepoManifest>, FetchDeviceMetadataError> {
+    let mut muppets_manifests = HashMap::new();
+    for branch in branches.iter() {
+        if !muppets_manifests.contains_key(branch) {
+            println!("Fetching TheMuppets manifest (branch {branch})...");
+            let muppets = nix_prefetch_git_repo(&Repository {
+                url: "https://github.com/TheMuppets/manifests".to_string(),
+            }, &format!("refs/heads/{branch}"), None).map_err(|e| FetchDeviceMetadataError::PrefetchGit(e))?;
+
+            let muppets_manifest_xml = fs::read(format!("{}/muppets.xml", &muppets.path()))
+                .map_err(|e| FetchDeviceMetadataError::FileRead(e))?;
+            let muppets_manifest: GitRepoManifest = quick_xml::de::from_str(
+                &str::from_utf8(&muppets_manifest_xml).map_err(|e| FetchDeviceMetadataError::Utf8(e))?
+            ).map_err(|e| FetchDeviceMetadataError::ParseMuppetsManifest(e))?;
+            muppets_manifests.insert(branch.clone(), muppets_manifest);
+        }
+    }
+
+    Ok(muppets_manifests)
+}
+
 pub fn fetch_device_metadata(device_metadata_path: &str) -> Result<HashMap<String, DeviceMetadata>, FetchDeviceMetadataError> {
     println!("Fetching LineageOS hudson...");
     let hudson = nix_prefetch_git_repo(&Repository {
@@ -141,22 +144,8 @@ pub fn fetch_device_metadata(device_metadata_path: &str) -> Result<HashMap<Strin
         build_targets
     };
 
-    let mut muppets_manifests = HashMap::new();
-    for (_, _, branch) in build_targets.iter() {
-        if !muppets_manifests.contains_key(branch) {
-            println!("Fetching TheMuppets manifest (branch {branch})...");
-            let muppets = nix_prefetch_git_repo(&Repository {
-                url: "https://github.com/TheMuppets/manifests".to_string(),
-            }, &format!("refs/heads/{branch}"), None).map_err(|e| FetchDeviceMetadataError::PrefetchGit(e))?;
-
-            let muppets_manifest_xml = fs::read(format!("{}/muppets.xml", &muppets.path()))
-                .map_err(|e| FetchDeviceMetadataError::FileRead(e))?;
-            let muppets_manifest: MuppetsManifest = quick_xml::de::from_str(
-                &str::from_utf8(&muppets_manifest_xml).map_err(|e| FetchDeviceMetadataError::Utf8(e))?
-            ).map_err(|e| FetchDeviceMetadataError::ParseMuppetsManifest(e))?;
-            muppets_manifests.insert(branch.clone(), muppets_manifest);
-        }
-    }
+    let branches: Vec<String> = build_targets.iter().map(|x| x.2.clone()).collect();
+    let muppets_manifests = fetch_muppets_manifests_for_branches(branches.as_ref())?;
 
     let reader = BufReader::new(File::open(format!("{}/updater/devices.json", &hudson.path()))
         .map_err(|e| FetchDeviceMetadataError::FileRead(e))?);
