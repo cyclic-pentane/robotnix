@@ -105,10 +105,10 @@ struct GitRepoManifest {
     #[serde(rename = "default")]
     default_remote: Option<GitRepoDefaultRemote>,
 
-    #[serde(rename = "project")]
+    #[serde(rename = "project", default)]
     projects: Vec<GitRepoProject>,
 
-    #[serde(rename = "include")]
+    #[serde(rename = "include", default)]
     includes: Vec<GitRepoInclude>,
 }
 
@@ -273,7 +273,7 @@ pub fn fetch_git_repo_metadata(filename: &str, manifest_repo: &Repository, branc
         let fetchgit_args = nix_prefetch_git_repo(manifest_repo, &format!("refs/heads/{branch}"), None)
             .map_err(|e| FetchGitRepoMetadataError::PrefetchGit(e))?;
 
-        let manifest = read_manifest_file(
+        let manifest = read_and_flatten_manifest(
             &Path::new(&fetchgit_args.path()),
             Path::new("default.xml")
         ).map_err(|e| FetchGitRepoMetadataError::ReadManifest(e))?;
