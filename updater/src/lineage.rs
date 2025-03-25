@@ -47,7 +47,7 @@ struct HudsonDevice {
     name: String,
 }
 
-fn get_proprietary_repos_for_device(muppets_manifests: &GitRepoManifest, device: &str, branch: &str) -> Vec<RepoProject> {
+fn get_proprietary_repos_for_device(muppets_manifests: &GitRepoManifest, device: &str, branch: &str, real_branch: &str) -> Vec<RepoProject> {
     let mut repos = vec![];
     for entry in muppets_manifests.projects.iter() {
         let mut found = false;
@@ -73,7 +73,7 @@ fn get_proprietary_repos_for_device(muppets_manifests: &GitRepoManifest, device:
                             repo: Repository {
                                 url: format!("https://github.com/TheMuppets/{repo_name}"),
                             },
-                            git_ref: format!("refs/heads/{branch}"),
+                            git_ref: format!("refs/heads/{real_branch}"),
                             linkfiles: HashMap::new(),
                             copyfiles: HashMap::new(),
                         });
@@ -297,6 +297,7 @@ pub fn fetch_device_metadata(device_metadata_path: &str) -> Result<HashMap<Strin
         projects.append(&mut get_proprietary_repos_for_device(
                 muppets_manifests.get(&branch).unwrap(),
                 &device,
+                &branch,
                 real_branch,
         ));
 
