@@ -117,43 +117,157 @@ pub enum ReadManifestError {
     FileRead(io::Error),
     Utf8(str::Utf8Error),
     Parser(quick_xml::errors::serialize::DeError),
+    MissingDefaultRemote,
+    MissingDefaultRef,
+    UnknownRemote(String),
     MoreThanOneDefaultRemote,
 }
 
-pub fn read_manifest_file(manifest_path: &Path, filename: &Path) -> Result<GitRepoManifest, ReadManifestError> {
-    let manifest_xml_bytes = fs::read(manifest_path.join(filename))
-        .map_err(|e| ReadManifestError::FileRead(e))?;
+impl GitRepoManifest {
+    pub fn read(manifest_path: &Path, filename: &Path) -> Result<GitRepoManifest, ReadManifestError> {
+        let manifest_xml_bytes = fs::read(manifest_path.join(filename))
+            .map_err(|e| ReadManifestError::FileRead(e))?;
 
-    let manifest_xml = str::from_utf8(&manifest_xml_bytes)
-        .map_err(|e| ReadManifestError::Utf8(e))?;
+        let manifest_xml = str::from_utf8(&manifest_xml_bytes)
+            .map_err(|e| ReadManifestError::Utf8(e))?;
 
-    let manifest: GitRepoManifest = quick_xml::de::from_str(&manifest_xml)
-        .map_err(|e| ReadManifestError::Parser(e))?;
+        let manifest: GitRepoManifest = quick_xml::de::from_str(&manifest_xml)
+            .map_err(|e| ReadManifestError::Parser(e))?;
 
-    Ok(manifest)
-}
-
-
-fn read_and_flatten_manifest(manifest_path: &Path, filename: &Path) -> Result<GitRepoManifest, ReadManifestError> {
-    let mut manifest = read_manifest_file(manifest_path, filename)?;
-
-    for include in manifest.includes.iter() {
-        let mut submanifest = read_and_flatten_manifest(manifest_path, &include.name)?;
-
-        manifest.remotes.append(&mut submanifest.remotes);
-        manifest.projects.append(&mut submanifest.projects);
-        
-        if let Some(default_remote) = submanifest.default_remote {
-            if let None = manifest.default_remote {
-                manifest.default_remote = Some(default_remote);
-            } else {
-                return Err(ReadManifestError::MoreThanOneDefaultRemote);
-            }
-        }
+        Ok(manifest)
     }
 
-    manifest.includes = vec![];
-    Ok(manifest)
+
+    pub fn read_and_flatten(manifest_path: &Path, filename: &Path) -> Result<GitRepoManifest, ReadManifestError> {
+        let mut manifest = GitRepoManifest::read(manifest_path, filename)?;
+
+        for include in manifest.includes.iter() {
+            let mut submanifest = GitRepoManifest::read_and_flatten(manifest_path, &include.name)?;
+
+            manifest.remotes.append(&mut submanifest.remotes);
+            manifest.projects.append(&mut submanifest.projects);
+            
+            if let Some(default_remote) = submanifest.default_remote {
+                if let None = manifest.default_remote {
+                    manifest.default_remote = Some(default_remote);
+                } else {
+                    return Err(ReadManifestError::MoreThanOneDefaultRemote);
+                }
+            }
+        }
+
+        manifest.includes = vec![];
+        Ok(manifest)
+    }
+
+    fn get_remote_specs(&self, root_url: &str) -> HashMap<String, RemoteSpec> {
+        let mut remote_specs = HashMap::new();
+        for remote in self.remotes.iter() {
+            let is_default_remote = self.default_remote
+                .as_ref()
+                .map(|x| x.remote == remote.name)
+                .unwrap_or(false);
+            let default_ref = if is_default_remote {
+                self.default_remote
+                    .as_ref()
+                    .unwrap()
+                    .default_ref
+                    .as_ref()
+                    .or(remote.default_ref.as_ref())
+            } else {
+                remote.default_ref.as_ref()
+            };
+            let remote_url_stripped = remote.fetch.strip_suffix('/').unwrap_or(&remote.fetch).to_string();
+            let root_url_stripped = root_url.strip_suffix('/').unwrap_or(&root_url).to_string();
+            remote_specs.insert(remote.name.clone(), RemoteSpec {
+                url: {
+                    if remote.fetch != ".." {
+                        remote_url_stripped
+                    } else {
+                        let url_parts: Vec<String> = root_url
+                            .split("/")
+                            .map(|x| x.to_string())
+                            .collect();
+                        url_parts[0..url_parts.len()-1].join("/")
+                    }
+                },
+                default_ref: default_ref.map(|x| x.to_string()),
+            });
+        }
+
+        remote_specs
+    }
+
+    pub fn get_url_and_ref(&self, remote: &Option<String>, custom_ref: &Option<String>, root_url: &str) -> Result<(String, String), ReadManifestError> {
+        let remote_specs = self.get_remote_specs(root_url);
+        let remote_name = remote
+            .as_ref()
+            .unwrap_or(
+                &self.default_remote.as_ref().ok_or(ReadManifestError::MissingDefaultRemote)?.remote
+            );
+        let remote_spec = remote_specs.get(remote_name)
+            .ok_or(ReadManifestError::UnknownRemote(remote_name.to_string()))?;
+
+        let git_ref = custom_ref
+            .as_ref()
+            .unwrap_or(
+                remote_spec.default_ref.as_ref().unwrap_or(
+                    self.default_remote.as_ref().ok_or(
+                        ReadManifestError::MissingDefaultRef
+                    )?
+                    .default_ref.as_ref().ok_or(
+                        ReadManifestError::MissingDefaultRef
+                    )?
+                )
+            )
+            .clone();
+
+        Ok((remote_spec.url.clone(), git_ref))
+    }
+
+    fn get_projects(&self, projects: &mut HashMap<String, RepoProject>, root_url: &str, branch: &str) -> Result<(), FetchGitRepoMetadataError> {
+        for project in self.projects.iter() {
+            let (url, git_ref) = self.
+                get_url_and_ref(&project.remote, &project.git_ref, root_url)
+                .map_err(|e| FetchGitRepoMetadataError::ReadManifest(e))?;
+            let project_url = format!("{}/{}", &url, &project.repo_name);
+
+            if !projects.contains_key(&project.path) {
+                projects.insert(project.path.clone(), RepoProject {
+                    path: project.path.clone(),
+                    nonfree: false,
+                    branch_settings: HashMap::new(),
+                });
+            }
+
+            let branch_settings = &mut projects
+                .get_mut(&project.path.clone())
+                .unwrap()
+                .branch_settings;
+            branch_settings.insert(branch.to_string(), RepoProjectBranchSettings {
+                repo: Repository {
+                    url: url,
+                },
+                copyfiles: {
+                    let mut files = HashMap::new();
+                    for c in project.copyfiles.iter() {
+                        files.insert(c.dest.clone(), c.src.clone());
+                    }
+                    files
+                },
+                linkfiles: {
+                    let mut files = HashMap::new();
+                    for l in project.linkfiles.iter() {
+                        files.insert(l.dest.clone(), l.src.clone());
+                    }
+                    files
+                },
+                git_ref: git_ref,
+            });
+        }
+
+        Ok(())
+    }
 }
 
 struct RemoteSpec {
@@ -161,98 +275,7 @@ struct RemoteSpec {
     default_ref: Option<String>,
 }
 
-fn get_remote_specs_from_manifest(manifest: &GitRepoManifest, root_url: &str) -> HashMap<String, RemoteSpec> {
-    let mut remote_specs = HashMap::new();
-    for remote in manifest.remotes.iter() {
-        let is_default_remote = manifest.default_remote
-            .as_ref()
-            .map(|x| x.remote == remote.name)
-            .unwrap_or(false);
-        let default_ref = if is_default_remote {
-            manifest.default_remote
-                .as_ref()
-                .unwrap()
-                .default_ref
-                .as_ref()
-                .or(remote.default_ref.as_ref())
-        } else {
-            remote.default_ref.as_ref()
-        };
-        remote_specs.insert(remote.name.clone(), RemoteSpec {
-            url: {
-                if remote.fetch != ".." {
-                    remote.fetch.clone()
-                } else {
-                    let url_parts: Vec<String> = root_url
-                        .split("/")
-                        .map(|x| x.to_string())
-                        .collect();
-                    url_parts[0..url_parts.len()-2].join("/")
-                }
-            },
-            default_ref: default_ref.map(|x| x.to_string()),
-        });
-    }
 
-    remote_specs
-}
-
-fn get_projects_from_manifest(manifest: &GitRepoManifest, projects: &mut HashMap<String, RepoProject>, root_url: &str, branch: &str) -> Result<(), FetchGitRepoMetadataError> {
-    let remote_specs = get_remote_specs_from_manifest(manifest, root_url);
-
-    for project in manifest.projects.iter() {
-        let remote_name = project.remote.as_ref().unwrap_or(
-            &manifest.default_remote.as_ref().ok_or(FetchGitRepoMetadataError::MissingDefaultRemote)?.remote
-        ).clone();
-        let remote = remote_specs
-            .get(&remote_name)
-            .ok_or(FetchGitRepoMetadataError::UnknownRemote(remote_name))?;
-        let remote_url_trunc = if remote.url.ends_with("/") {
-            &remote.url[0..remote.url.len()-1]
-        } else {
-            &remote.url
-        };
-        let project_url = format!("{}/{}", remote_url_trunc, &project.repo_name);
-
-        if !projects.contains_key(&project.path) {
-            projects.insert(project.path.clone(), RepoProject {
-                path: project.path.clone(),
-                nonfree: false,
-                branch_settings: HashMap::new(),
-            });
-        }
-
-        let branch_settings = &mut projects
-            .get_mut(&project.path.clone())
-            .unwrap()
-            .branch_settings;
-        branch_settings.insert(branch.to_string(), RepoProjectBranchSettings {
-            repo: Repository {
-                url: project_url,
-            },
-            copyfiles: {
-                let mut files = HashMap::new();
-                for c in project.copyfiles.iter() {
-                    files.insert(c.dest.clone(), c.src.clone());
-                }
-                files
-            },
-            linkfiles: {
-                let mut files = HashMap::new();
-                for l in project.linkfiles.iter() {
-                    files.insert(l.dest.clone(), l.src.clone());
-                }
-                files
-            },
-            git_ref: project.git_ref.as_ref()
-                .or(remote.default_ref.as_ref())
-                .cloned()
-                .ok_or(FetchGitRepoMetadataError::MissingDefaultRef)?,
-        });
-    }
-
-    Ok(())
-}
 
 #[derive(Debug)]
 pub enum FetchGitRepoMetadataError {
@@ -273,12 +296,12 @@ pub fn fetch_git_repo_metadata(filename: &str, manifest_repo: &Repository, branc
         let fetchgit_args = nix_prefetch_git_repo(manifest_repo, &format!("refs/heads/{branch}"), None)
             .map_err(|e| FetchGitRepoMetadataError::PrefetchGit(e))?;
 
-        let manifest = read_and_flatten_manifest(
+        let manifest = GitRepoManifest::read_and_flatten(
             &Path::new(&fetchgit_args.path()),
             Path::new("default.xml")
         ).map_err(|e| FetchGitRepoMetadataError::ReadManifest(e))?;
 
-        get_projects_from_manifest(&manifest, &mut projects, &manifest_repo.url, branch)?;
+        manifest.get_projects(&mut projects, &manifest_repo.url, branch)?;
     }
 
     let mut projects: Vec<RepoProject> = projects.values().cloned().collect();
