@@ -188,7 +188,7 @@ impl GitRepoManifest {
                             .split("/")
                             .map(|x| x.to_string())
                             .collect();
-                        url_parts[0..url_parts.len()-1].join("/")
+                        url_parts[0..url_parts.len()-2].join("/")
                     }
                 },
                 default_ref: default_ref.map(|x| x.to_string()),
@@ -227,10 +227,10 @@ impl GitRepoManifest {
 
     fn get_projects(&self, projects: &mut HashMap<String, RepoProject>, root_url: &str, branch: &str) -> Result<(), FetchGitRepoMetadataError> {
         for project in self.projects.iter() {
-            let (url, git_ref) = self.
+            let (remote_url, git_ref) = self.
                 get_url_and_ref(&project.remote, &project.git_ref, root_url)
                 .map_err(|e| FetchGitRepoMetadataError::ReadManifest(e))?;
-            let project_url = format!("{}/{}", &url, &project.repo_name);
+            let project_url = format!("{}/{}", &remote_url, &project.repo_name);
 
             if !projects.contains_key(&project.path) {
                 projects.insert(project.path.clone(), RepoProject {
@@ -246,7 +246,7 @@ impl GitRepoManifest {
                 .branch_settings;
             branch_settings.insert(branch.to_string(), RepoProjectBranchSettings {
                 repo: Repository {
-                    url: url,
+                    url: project_url,
                 },
                 copyfiles: {
                     let mut files = HashMap::new();

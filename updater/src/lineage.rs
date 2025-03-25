@@ -256,7 +256,7 @@ pub fn fetch_device_metadata(device_metadata_path: &str) -> Result<HashMap<Strin
         let mut projects = vec![];
         for dep in deps {
             let custom_ref = dep.branch.map(|x| format!("refs/heads/{x}"));
-            let (url, git_ref) = manifest.get_url_and_ref(
+            let (remote_url, git_ref) = manifest.get_url_and_ref(
                 &dep.remote,
                 &custom_ref, 
                 &"https://github.com/LineageOS/android"
@@ -269,6 +269,12 @@ pub fn fetch_device_metadata(device_metadata_path: &str) -> Result<HashMap<Strin
                 git_ref
             };
 
+            let remote_url = if remote_url == "https://github.com" {
+                "https://github.com/LineageOS".to_string()
+            } else {
+                remote_url
+            };
+
             let project = RepoProject {
                 nonfree: false,
                 path: dep.target_path,
@@ -276,7 +282,7 @@ pub fn fetch_device_metadata(device_metadata_path: &str) -> Result<HashMap<Strin
                     let mut branch_settings = HashMap::new();
                     branch_settings.insert(branch.clone(), RepoProjectBranchSettings {
                         repo: Repository {
-                            url: format!("{}/{}", &url, &dep.repository)
+                            url: format!("{}/{}", &remote_url, &dep.repository)
                         },
                         git_ref: git_ref,
                         copyfiles: HashMap::new(),
@@ -291,7 +297,7 @@ pub fn fetch_device_metadata(device_metadata_path: &str) -> Result<HashMap<Strin
         projects.append(&mut get_proprietary_repos_for_device(
                 muppets_manifests.get(&branch).unwrap(),
                 &device,
-                &branch,
+                real_branch,
         ));
 
         device_metadata.insert(device.clone(), DeviceMetadata { 
