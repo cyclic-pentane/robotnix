@@ -46,7 +46,7 @@
 
         cachix
 
-        cargo rustc pkg-config openssl
+        cargo rustc pkg-config openssl clippy
       ];
       PYTHONPATH=./scripts;
     };
