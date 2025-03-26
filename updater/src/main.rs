@@ -34,6 +34,9 @@ enum Command {
         #[arg(name = "branch", short, long)]
         branches: Vec<String>,
 
+        #[arg(name = "url", short, long)]
+        url: String,
+
         repo_metadata_file: String,
     },
     FetchRepoDirs {
@@ -63,11 +66,11 @@ fn main() {
     let args = Args::parse();
 
     match args.command.expect("You need to specify a command.") {
-        Command::FetchRepoMetadata { branches, repo_metadata_file } => {
+        Command::FetchRepoMetadata { branches, url, repo_metadata_file } => {
             fetch_git_repo_metadata(
                 &repo_metadata_file,
                 &Repository {
-                    url: "https://github.com/LineageOS/android".to_string(),
+                    url: url,
                 },
                 &branches
             ).unwrap();
