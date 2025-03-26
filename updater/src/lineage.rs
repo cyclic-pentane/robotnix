@@ -10,6 +10,7 @@ use std::io::BufReader;
 use serde::{Serialize, Deserialize};
 use serde_json;
 use quick_xml;
+use reqwest;
 
 use crate::base::{
     Variant,
@@ -102,6 +103,7 @@ pub enum FetchDeviceMetadataError {
     Parser(serde_json::Error),
     ModelNotFoundInUpdaterDir(String),
     UnknownBranch(String),
+    HttpError(reqwest::Error),
 }
 
 fn fetch_lineage_manifests_for_branches(branches: &[String]) -> Result<HashMap<String, GitRepoManifest>, FetchDeviceMetadataError> {
@@ -142,7 +144,7 @@ fn fetch_muppets_manifests_for_branches(branches: &[String]) -> Result<HashMap<S
     Ok(muppets_manifests)
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct LineageDependency {
     repository: String,
     target_path: String,
@@ -175,7 +177,59 @@ fn parse_build_targets(hudson_path: &str) -> Result<Vec<(String, String, String)
     Ok(build_targets)
 }
 
-fn fetch_lineage_dependencies(vendor: &str, device_name: &str, branch: &str) -> Result<Vec<LineageDependency>, FetchDeviceMetadataError> {
+
+fn recursively_lookup_dependencies(repo_name: &str, branch: &str, main_branch: &str, dep_cache: &mut HashMap<String, Vec<LineageDependency>>) -> Result<Vec<LineageDependency>, FetchDeviceMetadataError> {
+    println!("Fetching deps of {} (branch {})...", repo_name, branch);
+
+    let url = format!("https://raw.githubusercontent.com/LineageOS/{repo_name}/refs/heads/{branch}/lineage.dependencies");
+    let mut deps = match dep_cache.get(&url) {
+        None => {
+            let response = reqwest::blocking::get(&url)
+                .map_err(|e| FetchDeviceMetadataError::HttpError(e))?;
+            let deps = if response.status().is_success() {
+                let json = response.text().map_err(|e| FetchDeviceMetadataError::HttpError(e))?;
+                serde_json::from_str(&json)
+                    .map_err(|e| FetchDeviceMetadataError::Parser(e))?
+            } else {
+                vec![]
+            };
+            dep_cache.insert(url, deps.clone());
+            deps
+
+        },
+        Some(deps) => {
+            println!("Cache hit.");
+            deps.clone()
+        },
+    };
+
+    let mut children_deps = vec![];
+    for dep in deps.iter() {
+        // If a repo isn't on the LineageOS GitHub org, we assume that it doesn't have a
+        // lineage.dependencies.
+        if let Some(_) = dep.remote {
+            continue;
+        }
+
+        let next_deps = recursively_lookup_dependencies(
+            &dep.repository,
+            &dep.branch.as_ref().unwrap_or(&main_branch.to_string()),
+            main_branch,
+            dep_cache
+        )?;
+
+        for next_dep in next_deps {
+            if !deps.iter().any(|x| x.target_path == next_dep.target_path) {
+                children_deps.push(next_dep);
+            }
+        }
+    }
+    deps.append(&mut children_deps);
+
+    Ok(deps)
+}
+
+fn fetch_lineage_dependencies(manifest: &GitRepoManifest, vendor: &str, device_name: &str, branch: &str, dep_cache: &mut HashMap<String, Vec<LineageDependency>>) -> Result<Vec<LineageDependency>, FetchDeviceMetadataError> {
     // Currently, we need to infer the vendor code from the human-readable vendor name (e.g.
     // `bananapi` from "Banana Pi". It would be cool to programmatically pull this from somewhere
     // though.
@@ -196,17 +250,12 @@ fn fetch_lineage_dependencies(vendor: &str, device_name: &str, branch: &str) -> 
     }
 
     let repo_name = format!("android_device_{vendor_name}_{device_name}");
-    println!("Fetching device repo {repo_name} (branch {branch})...");
-    let device_repo = nix_prefetch_git_repo(&Repository {
-        url: format!("https://github.com/LineageOS/{repo_name}"),
-    }, &format!("refs/heads/{branch}"), None).map_err(|e| FetchDeviceMetadataError::PrefetchGit(e))?;
-
-    let json_bytes = fs::read(format!("{}/lineage.dependencies", &device_repo.path()))
-        .map_err(|e| FetchDeviceMetadataError::FileRead(e))?;
-    let json = std::str::from_utf8(&json_bytes)
-        .map_err(|e| FetchDeviceMetadataError::Utf8(e))?;
-    let mut deps: Vec<LineageDependency> = serde_json::from_str(&json)
-        .map_err(|e| FetchDeviceMetadataError::Parser(e))?;
+    let mut deps = recursively_lookup_dependencies(
+        &repo_name,
+        branch,
+        branch,
+        dep_cache,
+    )?;
 
     deps.insert(0, LineageDependency {
         repository: repo_name,
@@ -240,22 +289,29 @@ pub fn fetch_device_metadata(device_metadata_path: &str) -> Result<HashMap<Strin
         .map_err(|e| FetchDeviceMetadataError::Parser(e))?;
 
     let mut device_metadata = HashMap::new();
-
+    let mut dep_cache = HashMap::new();
     // TODO make this multi-branch as soon as I find out where to get the information about the
     // device's supported branches from.
-    for (device, variant, branch) in build_targets {
-        let hudson_device = hudson_devices.iter().filter(|x| x.model == device).next().ok_or(FetchDeviceMetadataError::ModelNotFoundInUpdaterDir(device.clone()))?;
-        let manifest = lineage_manifests.get(&branch).unwrap();
+    for (i, (device, variant, branch)) in build_targets.iter().enumerate() {
+        println!("At device {} ({}/{})", device, i+1, build_targets.len());
+        let hudson_device = hudson_devices.iter().filter(|x| x.model == *device).next().ok_or(FetchDeviceMetadataError::ModelNotFoundInUpdaterDir(device.to_string()))?;
+        let manifest = lineage_manifests.get(branch).unwrap();
         let real_branch = {
             // TODO currently we need to infer this, but there should be a better way.
             // TODO softcode this
             if branch == "lineage-21.0" {
                 "lineage-21"
             } else {
-                branch.as_ref()
+                branch
             }
         };
-        let deps = fetch_lineage_dependencies(&hudson_device.oem, &device, &real_branch)?;
+        let deps = fetch_lineage_dependencies(
+            &manifest,
+            &hudson_device.oem,
+            device,
+            &real_branch,
+            &mut dep_cache,
+        )?;
 
         let mut projects = vec![];
         for dep in deps {
@@ -284,7 +340,7 @@ pub fn fetch_device_metadata(device_metadata_path: &str) -> Result<HashMap<Strin
                 path: dep.target_path,
                 branch_settings: {
                     let mut branch_settings = HashMap::new();
-                    branch_settings.insert(branch.clone(), RepoProjectBranchSettings {
+                    branch_settings.insert(branch.to_string(), RepoProjectBranchSettings {
                         repo: Repository {
                             url: format!("{}/{}", &remote_url, &dep.repository)
                         },
@@ -300,15 +356,15 @@ pub fn fetch_device_metadata(device_metadata_path: &str) -> Result<HashMap<Strin
         }
 
         projects.append(&mut get_proprietary_repos_for_device(
-                muppets_manifests.get(&branch).unwrap(),
+                muppets_manifests.get(branch).unwrap(),
                 &device,
-                &branch,
+                branch,
                 real_branch,
         ));
 
         device_metadata.insert(device.clone(), DeviceMetadata { 
             name: hudson_device.name.clone(),
-            branch: branch.clone(),
+            branch: branch.to_string(),
             // TODO We use the json parser for strings like `userdebug` by wrapping them in quotation
             // marks, like `"userdebug"`. This is a dirty hack and I need to figure out how to do
             // this properly at some point.
