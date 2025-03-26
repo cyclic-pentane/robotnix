@@ -76,6 +76,10 @@ fn get_proprietary_repos_for_device(muppets_manifests: &GitRepoManifest, device:
                             git_ref: format!("refs/heads/{real_branch}"),
                             linkfiles: HashMap::new(),
                             copyfiles: HashMap::new(),
+                            // TODO dedupe group parsing code by writing a custom serde parser
+                            groups: entry.groups.as_ref().map(
+                                |x| x.split(",").map(|y| y.to_string()).collect()
+                            ).unwrap_or(vec![]),
                         });
                         branch_settings
                     },
@@ -285,6 +289,7 @@ pub fn fetch_device_metadata(device_metadata_path: &str) -> Result<HashMap<Strin
                             url: format!("{}/{}", &remote_url, &dep.repository)
                         },
                         git_ref: git_ref,
+                        groups: vec![],
                         copyfiles: HashMap::new(),
                         linkfiles: HashMap::new(),
                     });

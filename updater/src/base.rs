@@ -47,6 +47,7 @@ pub struct RepoProjectBranchSettings {
     pub git_ref: String,
     pub linkfiles: HashMap<String, String>, // dst -> src
     pub copyfiles: HashMap<String, String>, // dst -> src
+    pub groups: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]

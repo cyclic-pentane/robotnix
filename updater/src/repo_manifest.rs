@@ -253,6 +253,9 @@ impl GitRepoManifest {
                     }
                     files
                 },
+                groups: project.groups.as_ref().map(
+                            |x| x.split(",").map(|y| y.to_string()).collect()
+                        ).unwrap_or(vec![]),
                 git_ref: git_ref,
             });
         }
