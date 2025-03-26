@@ -48,16 +48,7 @@ pub struct GitRepoDefaultRemote {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct GitRepoLinkfile {
-    #[serde(rename = "@src")]
-    src: String,
-
-    #[serde(rename = "@dest")]
-    dest: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct GitRepoCopyfile {
+pub struct GitRepoFile {
     #[serde(rename = "@src")]
     src: String,
 
@@ -83,10 +74,10 @@ pub struct GitRepoProject {
     pub git_ref: Option<String>,
 
     #[serde(rename = "linkfile", default)]
-    pub linkfiles: Vec<GitRepoLinkfile>,
+    pub linkfiles: Vec<GitRepoFile>,
 
     #[serde(rename = "copyfile", default)]
-    pub copyfiles: Vec<GitRepoCopyfile>,
+    pub copyfiles: Vec<GitRepoFile>,
 }
 
 // TODO use Path and PathBuf everywhere where they're applicable
