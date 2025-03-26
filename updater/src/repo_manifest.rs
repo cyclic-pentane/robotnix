@@ -41,10 +41,10 @@ pub struct GitRepoDefaultRemote {
     default_ref: Option<String>,
 
     #[serde(rename = "@sync-c")]
-    sync_c: String,
+    sync_c: Option<String>,
 
     #[serde(rename = "@sync-j")]
-    sync_j: String,
+    sync_j: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
