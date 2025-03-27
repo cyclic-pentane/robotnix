@@ -112,6 +112,8 @@ pub fn nix_prefetch_git_repo(repo: &Repository, git_ref: &str, prev: Option<Fetc
 
     if fetch {
         let output = Command::new("nix-prefetch-git")
+            .arg(&"--fetch-lfs")
+            .arg(&"--fetch-submodules")
             .arg(&repo.url)
             .arg("--rev")
             .arg(&rev)
