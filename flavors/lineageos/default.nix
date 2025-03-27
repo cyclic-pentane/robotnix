@@ -23,9 +23,7 @@ let
 
   deviceMetadata = lib.importJSON ./device-metadata.json;
   LineageOSRelease = androidVersionToLineageBranch.${builtins.toString config.androidVersion};
-  repoDirs = lib.importJSON (./. + "/${LineageOSRelease}/repo.json");
-  _deviceDirs = importJSON (./. + "/${LineageOSRelease}/device-dirs.json");
-  vendorDirs = importJSON (./. + "/${LineageOSRelease}/vendor-dirs.json");
+  defaultBranch = deviceMetadata.${config.device}.branch;
 
   # TODO: Condition on soc name?
   dtbReproducibilityFix = ''
@@ -63,7 +61,6 @@ let
     postPatch = config.kernel.postPatch
       + optionalString (config.useReproducibilityFixes && (elem n kernelsNeedFix)) ("\n" + dtbReproducibilityFix);
   });
-  deviceDirs = mapAttrs patchKernelDir _deviceDirs;
 
   supportedDevices = attrNames deviceMetadata;
 
@@ -72,14 +69,10 @@ let
   filterDirsAttrs = dirs: mapAttrs (n: v: filterDirAttrs v) dirs;
 in mkIf (config.flavor == "lineageos")
 {
-  androidVersion = let
-      defaultBranch = deviceMetadata.${config.device}.branch;
-    in mkIf (deviceMetadata ? ${config.device}) (mkDefault (lib.toInt lineageBranchToAndroidVersion.${defaultBranch}));
+  androidVersion = mkIf (deviceMetadata ? ${config.device}) (mkDefault (lib.toInt lineageBranchToAndroidVersion.${defaultBranch}));
   flavorVersion = removePrefix "lineage-" androidVersionToLineageBranch.${toString config.androidVersion};
 
   productNamePrefix = "lineage_"; # product names start with "lineage_"
-
-  buildDateTime = mkDefault (import (./. + "/${LineageOSRelease}/lastUpdated.epoch"));
 
   # LineageOS uses this by default. If your device supports it, I recommend using variant = "user"
   variant = mkDefault "userdebug";
@@ -90,9 +83,29 @@ in mkIf (config.flavor == "lineageos")
   in optional isUnsupportedDevice "${config.device} is not an officially-supported device for LineageOS"
      ++ optional isUnmaintained "${LineageOSRelease} is unmaintained in robotnix and may break at any time";
 
-  source.dirs = mkMerge ([
-    repoDirs
+  source.manifests."lineage" = {
+    manifest = ./repo-metadata.json;
+    lockfile = ./. + "/${LineageOSRelease}/repo.lock";
+    branch = defaultBranch;
+  };
 
+  source.dirs = mkMerge ([
+    (
+      lib.listToAttrs (
+        builtins.map
+        (project: {
+          name = project.path;
+          value = {
+            src = let
+              fetchgitArgs = (lib.importJSON (./. + "/${LineageOSRelease}/devices.lock"))."${project.path}";
+            in pkgs.fetchgit {
+              inherit (fetchgitArgs) url rev hash fetchLFS fetchSubmodules;
+            };
+          };
+        })
+        (lib.importJSON ./device-metadata.json)."${config.device}".deps
+      )
+    )
     {
       "vendor/lineage".patches = [
         (if lib.versionAtLeast (toString config.androidVersion) "14"
@@ -130,39 +143,7 @@ in mkIf (config.flavor == "lineageos")
       # So we'll just build chromium webview ourselves.
       "external/chromium-webview".enable = false;
     }
-  ] ++ optionals (deviceMetadata ? "${config.device}") (let
-    # Device-specific source dirs
-    vendor = toLower deviceMetadata.${config.device}.vendor;
-    deviceRelpath = "device/${vendor}/${config.device}";
-
-    # Retuns a list of all relpaths for the device (including deps) recursively
-    relpathWithDeps = relpath: [ relpath ] ++ (
-      flatten (map (p: relpathWithDeps p) deviceDirs.${relpath}.deps)
-    );
-    # All relpaths required by the device
-    relpaths = relpathWithDeps deviceRelpath;
-    filteredRelpaths = remove (attrNames repoDirs) relpaths; # Remove any repos that we're already including from repo json
-
-    # In LOS20, each device/ relpath has an associated vendor/ relpath.
-    # Well, usually...
-    deviceRelpaths = filter (path: hasPrefix "device/" path) relpaths;
-    vendorifiedRelpaths = map (replaceStrings [ "device/" ] [ "vendor/" ]) deviceRelpaths;
-
-    vendorRelpaths = if config.androidVersion >= 13 then (
-      # LOS20 needs vendor/$vendor/$device and all the common dirs but with
-      # vendor/ prefix
-      vendorifiedRelpaths
-    ) else [
-      # Older LOS need this
-      "vendor/${vendor}"
-    ];
-  in [
-    (filterDirsAttrs (getAttrs (filteredRelpaths) deviceDirs))
-    (filterDirsAttrs (getAttrs (vendorRelpaths) vendorDirs))
-  ]));
-
-  source.manifest.url = mkDefault "https://github.com/LineageOS/android.git";
-  source.manifest.rev = mkDefault "refs/heads/${LineageOSRelease}";
+  ]);
 
   # This is the prebuilt webview apk from LineageOS. This is the only working
   # webview we have access to (robotnix' own are in disrepair), so this should

@@ -4,28 +4,7 @@
 { config, pkgs, lib, ... }:
 
 let
-  inherit (lib) mkIf mkDefault mkOption types;
-
-  projectSource = p:
-    let
-      ref = if lib.strings.hasInfix "refs/heads" p.revisionExpr then lib.last (lib.splitString "/" p.revisionExpr) else p.revisionExpr;
-      name = builtins.replaceStrings ["/"] ["="] p.relpath;
-    in
-    if config.source.evalTimeFetching
-    then
-      builtins.fetchGit { # Evaluation-time source fetching. Uses nix's git cache, but any nix-instantiate will require fetching sources.
-        inherit (p) url rev;
-        inherit ref name;
-      }
-    else
-      pkgs.fetchgit { # Build-time source fetching. This should be preferred, but is slightly less convenient when developing.
-        inherit (p) url sha256 fetchSubmodules fetchLFS;
-        # Use revisionExpr if it is a tag so we use the tag in the name of the nix derivation instead of the revision
-        rev = if (p.revisionExpr != null && lib.hasPrefix "refs/tags/" p.revisionExpr) then p.revisionExpr else p.rev;
-        deepClone = false;
-      };
-
-
+  inherit (lib) mkIf mkDefault mkOption types literalExpression mkMerge;
   # A tree (attrset containing attrsets) which matches the source directories relpath filesystem structure.
   # e.g.
   # {
@@ -46,19 +25,22 @@ let
   in
     combineTreeBranches (lib.mapAttrsToList (name: dir: listToTreeBranch (lib.splitString "/" dir.relpath)) enabledDirs);
 
-  fileModule = types.submodule ({ config, ... }: {
+  manifestModule = types.submodule {
     options = {
-      src = mkOption {
-        type = types.str;
-        internal = true;
+      manifest = mkOption {
+        type = types.path;
+        description = "The manifest metadata file to use.";
       };
-
-      dest = mkOption {
+      lockfile = mkOption {
+        type = types.path;
+        description = "The manifest lockfile to use.";
+      };
+      branch = mkOption {
         type = types.str;
-        internal = true;
+        description = "The manifest branch to use.";
       };
     };
-  });
+  };
 
   dirModule = let
     _config = config;
@@ -119,71 +101,19 @@ let
         internal = true;
       };
 
-      # These remaining options should be set by json output of mk-vendor-file.py
-      url = mkOption {
-        type = types.nullOr types.str;
-        default = null;
-        internal = true;
-      };
-
-      rev = mkOption {
-        type = types.nullOr types.str;
-        default = null;
-        internal = true;
-      };
-
-      revisionExpr = mkOption {
-        type = types.nullOr types.str;
-        default = null;
-        internal = true;
-      };
-
-      tree = mkOption {
-        type = types.nullOr types.str;
-        default = null;
-        internal = true;
-      };
-
-      groups = mkOption {
-        default = [];
-        type = types.listOf types.str;
-        internal = true;
-      };
-
-      dateTime = mkOption {
-        default = 1;
-        type = types.int;
-        internal = true;
-      };
-
-      sha256 = mkOption {
-        type = types.nullOr types.str;
-        default = null;
-        internal = true;
-      };
-
-      fetchSubmodules = mkOption {
-        type = types.bool;
-        default = false;
-        internal = true;
-      };
-
-      fetchLFS = mkOption {
-        type = types.bool;
-        default = true;
-        internal = true;
+      copyfiles = mkOption {
+        type = types.attrsOf types.str;
+        default = {};
       };
 
       linkfiles = mkOption {
-        default = [];
-        type = types.listOf fileModule;
-        internal = true;
+        type = types.attrsOf types.str;
+        default = {};
       };
 
-      copyfiles = mkOption {
+      groups = mkOption {
+        type = types.listOf types.str;
         default = [];
-        type = types.listOf fileModule;
-        internal = true;
       };
     };
 
@@ -192,10 +122,6 @@ let
         (lib.any (g: lib.elem g config.groups) _config.source.includeGroups)
         || (!(lib.any (g: lib.elem g config.groups) _config.source.excludeGroups))
       );
-
-      src =
-        mkIf ((config.url != null) && (config.rev != null) && (config.sha256 != null))
-        (mkDefault (projectSource config));
 
       postPatch = let
         # Check if we need to make mountpoints in this directory for other repos to be mounted inside it.
@@ -208,44 +134,29 @@ let
         mkdir -p ${config.relpath}
         ${pkgs.util-linux}/bin/mount --bind ${config.src} ${config.relpath}
       '')
-      + (lib.concatMapStringsSep "\n" (c: ''
-        mkdir -p $(dirname ${c.dest})
-        cp --reflink=auto -f ${config.relpath}/${c.src} ${c.dest}
-      '') config.copyfiles)
-      + (lib.concatMapStringsSep "\n" (c: ''
-        mkdir -p $(dirname ${c.dest})
-        ln -sf --relative ${config.relpath}/${c.src} ${c.dest}
-      '') config.linkfiles);
+      + (lib.concatStringsSep "\n" (lib.mapAttrsToList (dest: src: ''
+        mkdir -p $(dirname ${dest})
+        cp --reflink=auto -f ${config.relpath}/${src} ${dest}
+      '') config.copyfiles))
+      + (lib.concatStringsSep "\n" (lib.mapAttrsToList (dest: src: ''
+        mkdir -p $(dirname ${dest})
+        ln -sf --relative ${config.relpath}/${src} ${dest}
+      '') config.linkfiles));
     };
   });
 in
 {
   options = {
     source = {
-      # End-user should either set source.manifest.* or source.dirs
-      manifest = {
-        url = mkOption {
-          type = types.str;
-          description = "URL to repo manifest repository. Not necessary to set if using `source.dirs` directly.";
-        };
-
-        rev = mkOption {
-          type = types.str;
-          description = "Revision/tag to use from repo manifest repository.";
-        };
-
-        sha256 = mkOption {
-          type = types.str;
-          description = "Nix sha256 hash of repo manifest repository.";
-        };
-      };
-
-      evalTimeFetching = mkOption {
-        default = false;
-        description = ''
-          Set config.source.dirs automatically using IFD with information from `source.manifest`.
-          Also enables use of `builtins.fetchGit` instead of `pkgs.fetchgit` if not all sha256 hashes are available.
-          (Can be useful for development, but not recommended normally)
+      manifests = mkOption {
+        default = {};
+        type = types.attrsOf manifestModule;
+        description = "Manifest files to read the source dir tree from. Generated by the updater.";
+        example = literalExpression ''
+          {
+            repoMetadata = ./repo-metadata.json;
+            repoLockfile = ./repo.lock;
+          }
         '';
       };
 
@@ -253,9 +164,7 @@ in
         default = {};
         type = types.attrsOf dirModule;
         description = ''
-          Directories to include in Android build process.
-          Normally set by the output of `mk_repo_file.py`.
-          However, additional source directories can be added to the build here using this option as well.
+          Additional directories to include in the Android build process.
         '';
       };
 
@@ -280,12 +189,21 @@ in
   };
 
   config.source = {
-    dirs = mkIf config.source.evalTimeFetching (import ./repo2nix.nix {
-      manifest = config.source.manifest.url;
-      inherit (config.source.manifest) rev sha256;
-    });
-
     unpackScript = lib.concatMapStringsSep "\n" (d: d.unpackScript) (lib.attrValues config.source.dirs);
+
+    dirs = lib.mkMerge (lib.mapAttrsToList (_: value:
+      lib.listToAttrs (builtins.map (project: {
+        name = project.path;
+        value = {
+          inherit (project.branch_settings."${value.branch}") groups copyfiles linkfiles;
+          src = let
+            fetchgitArgs = (lib.importJSON value.lockfile)."${project.path}";
+          in pkgs.fetchgit {
+            inherit (fetchgitArgs) url rev hash fetchLFS fetchSubmodules;
+          };
+        };
+      }) (builtins.filter (p: builtins.hasAttr value.branch p.branch_settings) (lib.importJSON value.manifest)))
+    ) config.source.manifests);
   };
 
   config.build = {
