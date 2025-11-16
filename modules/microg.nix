@@ -87,7 +87,7 @@ in
       # that's the only supported method to get signature spoofing.
       #
       # FIXME patch that out and make it accept the signing key instead
-      certificate = if config.flavor == "lineageos" && config.androidVersion >= 13 then "PRESIGNED" else "microg";
+      certificate = if (config.flavor == "lineageos" && config.androidVersion >= 13)  || (config.flavor == "grapheneos" && config.androidVersion >= 16) then "PRESIGNED" else "microg";
     in {
       GmsCore = {
         apk = verifyApk (pkgs.fetchurl {
